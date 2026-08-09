@@ -4969,7 +4969,7 @@ function normalizeInitialRichContent(content){
 function richEditorHtml(id, target, content, placeholder, extraClass){
   const initial = normalizeInitialRichContent(content);
   const cls = extraClass ? `rich-editor ${extraClass}` : 'rich-editor';
-  return `<div class="${cls}" contenteditable="true" data-id="${id}" data-target="${escapeAttr(target || 'content')}" data-placeholder="${escapeAttr(placeholder)}" oninput="handleRichEditorInput(event)" onpaste="handleRichEditorPaste(event)" onblur="handleRichEditorBlur(event)">${initial}</div>`;
+  return `<div class="${cls}" contenteditable="true" data-id="${id}" data-target="${escapeAttr(target || 'content')}" data-placeholder="${escapeAttr(placeholder)}" oninput="handleRichEditorInput(event)" onpaste="handleRichEditorPaste(event)" onblur="handleRichEditorBlur(event)" onkeydown="handleRichEditorKeydown(event)">${initial}</div>`;
 }
 function persistRichEditorContent(div){
   const id = div.dataset.id;
@@ -5062,6 +5062,34 @@ function handleRichEditorInput(e){
 }
 function handleRichEditorBlur(e){
   persistRichEditorContent(e.target);
+}
+function handleRichEditorKeydown(e){
+  // Fix: pressing Backspace at the very start of the FIRST item in a
+  // bulleted/numbered list does nothing in most browsers (there's no
+  // preceding character to delete and no more list levels to outdent
+  // to), leaving the user stuck unable to remove an accidentally-created
+  // list. Detect that exact situation and unwrap the list back to a
+  // plain paragraph, matching Backspace behavior in Word/Google Docs.
+  if(e.key !== 'Backspace') return;
+  const sel = window.getSelection();
+  if(!sel.rangeCount || !sel.isCollapsed) return;
+  const range = sel.getRangeAt(0);
+  let node = range.startContainer;
+  const li = (node.nodeType === Node.TEXT_NODE ? node.parentElement : node).closest && (node.nodeType === Node.TEXT_NODE ? node.parentElement : node).closest('li');
+  if(!li) return;
+  const list = li.parentElement;
+  if(!list || (list.tagName !== 'UL' && list.tagName !== 'OL')) return;
+  if(list.firstElementChild !== li) return; // only the first item is stuck
+  // Confirm the caret is truly at the start of this list item's content
+  const preRange = document.createRange();
+  preRange.selectNodeContents(li);
+  preRange.setEnd(range.startContainer, range.startOffset);
+  if(preRange.toString().length !== 0) return;
+  e.preventDefault();
+  const isOl = list.tagName === 'OL';
+  document.execCommand(isOl ? 'insertOrderedList' : 'insertUnorderedList');
+  const editor = e.currentTarget;
+  if(editor) persistRichEditorContent(editor);
 }
 function handleRichEditorPaste(e){
   e.preventDefault();
@@ -5765,11 +5793,35 @@ function openLiveMode(){
   document.getElementById('liveModeOverlay').classList.add('open');
   applyLiveModeSizeAndTheme();
   document.getElementById('liveModeContent').scrollTop = 0;
+  requestLiveModeFullscreen();
 }
 function closeLiveMode(){
   document.getElementById('liveModeOverlay').classList.remove('open');
   closeLiveFontPopover();
+  exitLiveModeFullscreen();
 }
+function requestLiveModeFullscreen(){
+  const el = document.getElementById('liveModeOverlay');
+  const req = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
+  if(req){ req.call(el).catch(()=>{}); }
+}
+function exitLiveModeFullscreen(){
+  const isFs = document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement;
+  if(isFs){
+    const exit = document.exitFullscreen || document.webkitExitFullscreen || document.msExitFullscreen;
+    if(exit) exit.call(document).catch(()=>{});
+  }
+}
+// If the user backs out of fullscreen directly (e.g. pressing Escape or a
+// hardware/back gesture) rather than clicking Exit, close Presentation Mode
+// too so the app doesn't get stuck showing the overlay without fullscreen.
+['fullscreenchange','webkitfullscreenchange','MSFullscreenChange'].forEach(function(evt){
+  document.addEventListener(evt, function(){
+    const isFs = document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement;
+    const overlay = document.getElementById('liveModeOverlay');
+    if(!isFs && overlay && overlay.classList.contains('open')) closeLiveMode();
+  });
+});
 
 async function assembleDocxBlob(bodyXml){
   const CONTENT_TYPES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
