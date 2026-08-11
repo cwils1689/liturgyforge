@@ -9097,6 +9097,19 @@ function toggleSchedulePanel(){
     }
   }
 }
+async function handleScheduleMinisterSelect(selectEl, dateKey, key){
+  if(selectEl.value === '__add_new_minister__'){
+    const name = await customPrompt('Add a new minister to the roster:');
+    const trimmed = (name || '').trim();
+    if(trimmed){
+      addMinister(trimmed);
+      updateScheduleField(dateKey, key, trimmed);
+    }
+    renderScheduleTable();
+    return;
+  }
+  updateScheduleField(dateKey, key, selectEl.value);
+}
 function updateScheduleField(dateKey, field, value){
   if(!scheduleData[dateKey]) scheduleData[dateKey] = {};
   scheduleData[dateKey][field] = value;
@@ -9180,7 +9193,7 @@ function renderScheduleTable(){
       `<span class="sg-resize-handle" onmousedown="startScheduleColResize(event,'${c.key}')"></span>` +
     `</div>`).join('');
 
-  const ministerOptions = name => `<option value="">—</option>` + ministerRoster.map(m => `<option value="${escapeAttr(m)}" ${name===m?'selected':''}>${escapeHTML(m)}</option>`).join('');
+  const ministerOptions = name => `<option value="">—</option>` + ministerRoster.map(m => `<option value="${escapeAttr(m)}" ${name===m?'selected':''}>${escapeHTML(m)}</option>`).join('') + `<option value="__add_new_minister__">+ Add new…</option>`;
 
   let rows = dates.map(dateKey => {
     const entry = scheduleData[dateKey] || {};
@@ -9189,7 +9202,7 @@ function renderScheduleTable(){
       const val = entry[c.key] || '';
       let inputHtml;
       if(c.kind === 'minister'){
-        inputHtml = `<select onchange="updateScheduleField('${dateKey}','${c.key}',this.value)">${ministerOptions(val)}</select>`;
+        inputHtml = `<select onchange="handleScheduleMinisterSelect(this,'${dateKey}','${c.key}')">${ministerOptions(val)}</select>`;
       } else if(c.kind === 'series'){
         inputHtml = `<button type="button" class="series-picker-trigger series-picker-trigger-cell" onclick="openSeriesPicker(this, '${escapeAttr(val)}', function(name){ updateScheduleField('${dateKey}','sermonSeries',name); renderScheduleTable(); })">${val ? escapeHTML(val) : '—'} <span class="series-picker-caret">▾</span></button>`;
       } else if(c.wide){
