@@ -7327,9 +7327,16 @@ function restoreAllDataFromFile(file){
           await pushLiturgyToSupabase(dateStr, snapshot);
         }
       }
+      // Note: the Planner schedule is stored locally under
+      // 'liturgySchedule' but synced to the cloud under the shorter key
+      // 'schedule' (see saveSchedule()) — this mapping was previously
+      // missing here, so restoring from a backup file silently wrote the
+      // schedule to an unused cloud row instead of the one every device
+      // actually reads, leaving the cloud copy stale after a restore.
+      const CLOUD_KEY_ALIASES = { liturgySchedule: 'schedule' };
       for(const key of BACKUP_CLOUD_SHARED_KEYS){
         if(payload.data[key] !== undefined){
-          await pushSharedDataToSupabase(key, payload.data[key]);
+          await pushSharedDataToSupabase(CLOUD_KEY_ALIASES[key] || key, payload.data[key]);
         }
       }
     }
