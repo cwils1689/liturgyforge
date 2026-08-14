@@ -6180,16 +6180,62 @@ async function restoreSupabaseSession(){
     console.error('Supabase session check failed; continuing local-only.', e);
   }
 }
+/* ---------------------------------------------------------------------
+   Merge-before-write helper — every cloud save used to be a blind
+   whole-row upsert, so whichever browser saved last (even a stale tab
+   that hadn't pulled recent changes) silently blanked out anything the
+   other browser had added since. This recursively merges two versions
+   of the same data, preferring whichever side actually has content in
+   each field/date/element instead of picking one whole side and
+   discarding the other. A save from a stale browser can now still add
+   its own new edits without erasing content it never saw.
+   Trade-off: this can't tell a deliberate deletion (clearing a field
+   on purpose) from staleness, so it always favors non-blank content.
+   That's intentional — for this app, silently losing content is a much
+   worse failure than a cleared field reappearing and needing to be
+   deleted again.
+--------------------------------------------------------------------- */
+function mergeFavoringContent(cloudVal, localVal){
+  if(localVal === undefined || localVal === null) return cloudVal;
+  if(cloudVal === undefined || cloudVal === null) return localVal;
+  const isPlainObj = v => v && typeof v === 'object' && !Array.isArray(v);
+  if(isPlainObj(cloudVal) && isPlainObj(localVal)){
+    const merged = {};
+    new Set([...Object.keys(cloudVal), ...Object.keys(localVal)]).forEach(k => {
+      merged[k] = mergeFavoringContent(cloudVal[k], localVal[k]);
+    });
+    return merged;
+  }
+  if(Array.isArray(cloudVal) && Array.isArray(localVal)){
+    if(cloudVal.length === localVal.length){
+      return cloudVal.map((cv, i) => mergeFavoringContent(cv, localVal[i]));
+    }
+    // Lengths differ (an item was added/removed) — index-by-index
+    // merging would line up the wrong elements, so just keep whichever
+    // whole array has more content rather than guessing.
+    const richness = v => { try{ return JSON.stringify(v).length; }catch(e){ return 0; } };
+    return richness(localVal) >= richness(cloudVal) ? localVal : cloudVal;
+  }
+  if(localVal === '' && cloudVal !== '') return cloudVal;
+  return localVal;
+}
 async function pushLiturgyToSupabase(dateStr, snapshot){
-  if(!sbClient || !currentUser || !dateStr) return;
+  if(!sbClient || !currentUser || !dateStr) return null;
   try{
+    let merged = snapshot;
+    try{
+      const { data: existing } = await sbClient.from('liturgies').select('data').eq('service_date', dateStr).maybeSingle();
+      if(existing && existing.data) merged = mergeFavoringContent(existing.data, snapshot);
+    }catch(e){ /* couldn't pre-fetch; fall back to pushing the snapshot as-is */ }
     await sbClient.from('liturgies').upsert({
       service_date: dateStr,
-      data: snapshot,
+      data: merged,
       updated_at: new Date().toISOString()
     }, { onConflict: 'service_date' });
+    return merged;
   }catch(e){
     console.error('Could not sync this service to the cloud; it is still saved locally.', e);
+    return null;
   }
 }
 async function fetchLiturgyFromSupabase(dateStr){
@@ -6226,15 +6272,20 @@ async function fetchAllServiceSnapshotsFromSupabase(){
    local-only (personal, not shared).
 --------------------------------------------------------------------- */
 async function pushSharedDataToSupabase(key, data){
-  if(!sbClient || !currentUser) return false;
+  if(!sbClient || !currentUser) return null;
   try{
+    let merged = data;
+    try{
+      const { data: existing } = await sbClient.from('shared_data').select('data').eq('key', key).maybeSingle();
+      if(existing && existing.data !== undefined) merged = mergeFavoringContent(existing.data, data);
+    }catch(e){ /* couldn't pre-fetch; fall back to pushing as-is */ }
     await sbClient.from('shared_data').upsert({
-      key, data, updated_at: new Date().toISOString()
+      key, data: merged, updated_at: new Date().toISOString()
     }, { onConflict: 'key' });
-    return true;
+    return merged;
   }catch(e){
     console.error('Could not sync "' + key + '" to the cloud; still saved locally.', e);
-    return false;
+    return null;
   }
 }
 async function fetchAllSharedDataFromSupabase(){
@@ -6253,8 +6304,12 @@ async function fetchAllSharedDataFromSupabase(){
 async function pullSharedDataOnSignIn(){
   const cloud = await fetchAllSharedDataFromSupabase();
   if(!Object.keys(cloud).length) return;
-  if(cloud.schedule && Object.keys(cloud.schedule).length >= Object.keys(scheduleData).length){
-    scheduleData = cloud.schedule;
+  if(cloud.schedule){
+    // Merge rather than a length-based "whichever looks bigger" swap —
+    // a same-date-count local copy can still be missing individual
+    // cells (hymns, preacher, lectionary reader) that were filled in
+    // elsewhere, and the old length check couldn't detect that.
+    scheduleData = mergeFavoringContent(cloud.schedule, scheduleData);
     try{ localStorage.setItem('liturgySchedule', JSON.stringify(scheduleData)); }catch(e){}
   }
   if(Array.isArray(cloud.scheduleColumnsConfig) && cloud.scheduleColumnsConfig.length &&
@@ -6283,30 +6338,30 @@ async function pullSharedDataOnSignIn(){
     pushSharedDataToSupabase('scheduleColumnsConfig', scheduleColumns);
     if(document.getElementById('scheduleOverlay')?.classList.contains('open')) renderScheduleTable();
   }
-  if(cloud.ministerRoster && cloud.ministerRoster.length >= ministerRoster.length){
-    ministerRoster = cloud.ministerRoster;
+  if(cloud.ministerRoster){
+    ministerRoster = mergeFavoringContent(cloud.ministerRoster, ministerRoster);
     try{ localStorage.setItem('ministerRoster', JSON.stringify(ministerRoster)); }catch(e){}
     renderMinisterChips();
   }
-  if(cloud.ministerColors && Object.keys(cloud.ministerColors).length >= Object.keys(ministerColors).length){
-    ministerColors = cloud.ministerColors;
+  if(cloud.ministerColors){
+    ministerColors = mergeFavoringContent(cloud.ministerColors, ministerColors);
     try{ localStorage.setItem('ministerColors', JSON.stringify(ministerColors)); }catch(e){}
   }
-  if(cloud.ministerEmails && Object.keys(cloud.ministerEmails).length >= Object.keys(ministerEmails).length){
-    ministerEmails = cloud.ministerEmails;
+  if(cloud.ministerEmails){
+    ministerEmails = mergeFavoringContent(cloud.ministerEmails, ministerEmails);
     try{ localStorage.setItem('ministerEmails', JSON.stringify(ministerEmails)); }catch(e){}
   }
   updateSyncStatusIndicator();
-  if(cloud.sermonSeriesRoster && cloud.sermonSeriesRoster.length >= sermonSeriesRoster.length){
-    sermonSeriesRoster = cloud.sermonSeriesRoster;
+  if(cloud.sermonSeriesRoster){
+    sermonSeriesRoster = mergeFavoringContent(cloud.sermonSeriesRoster, sermonSeriesRoster);
     try{ localStorage.setItem('sermonSeriesRoster', JSON.stringify(sermonSeriesRoster)); }catch(e){}
   }
-  if(cloud.liturgyTemplates && Object.keys(cloud.liturgyTemplates).length >= Object.keys(liturgyTemplates).length){
-    liturgyTemplates = cloud.liturgyTemplates;
+  if(cloud.liturgyTemplates){
+    liturgyTemplates = mergeFavoringContent(cloud.liturgyTemplates, liturgyTemplates);
     try{ localStorage.setItem('liturgyTemplates', JSON.stringify(liturgyTemplates)); }catch(e){}
   }
-  if(cloud.customLiturgicalResources && cloud.customLiturgicalResources.length >= getCustomLiturgicalResources().length){
-    saveCustomLiturgicalResources(cloud.customLiturgicalResources);
+  if(cloud.customLiturgicalResources){
+    saveCustomLiturgicalResources(mergeFavoringContent(cloud.customLiturgicalResources, getCustomLiturgicalResources()));
   }
   if(cloud.churchName){
     try{ localStorage.setItem('churchName', cloud.churchName); }catch(e){}
@@ -8692,7 +8747,14 @@ function loadSchedule(){
 }
 function saveSchedule(){
   try{ localStorage.setItem('liturgySchedule', JSON.stringify(scheduleData)); }catch(e){}
-  pushSharedDataToSupabase('schedule', scheduleData);
+  pushSharedDataToSupabase('schedule', scheduleData).then(merged => {
+    if(!merged) return;
+    // Adopt the reconciled (merged) result so this browser's copy also
+    // reflects anything another device had saved that this session
+    // hadn't seen yet — without forcing a re-render mid-edit.
+    scheduleData = merged;
+    try{ localStorage.setItem('liturgySchedule', JSON.stringify(scheduleData)); }catch(e){}
+  });
 }
 const SCHEDULE_COLUMN_WIDTHS = {
   __select:34, __date:118, scripture:177, collect:134, hymn1:90, hymn2:340,
@@ -9094,8 +9156,8 @@ function toggleSchedulePanel(){
     updatePanelLayout();
     if(currentUser){
       fetchAllSharedDataFromSupabase().then(cloud => {
-        if(cloud.schedule && Object.keys(cloud.schedule).length >= Object.keys(scheduleData).length){
-          scheduleData = cloud.schedule;
+        if(cloud.schedule){
+          scheduleData = mergeFavoringContent(cloud.schedule, scheduleData);
           try{ localStorage.setItem('liturgySchedule', JSON.stringify(scheduleData)); }catch(e){}
           renderScheduleTable();
         }
