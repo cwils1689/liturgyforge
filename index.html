@@ -9520,7 +9520,7 @@ async function applyScheduleForDate(dateStr){
   if(pp && pp.sections){
     if(entry.opening){ const s=pp.sections.find(s=>s.key==='opening'); s.reference=entry.opening; s.content=''; fetchTargets.push({ id: pp.id, key:'opening' }); }
     if(entry.thanksgiving){ const s=pp.sections.find(s=>s.key==='thanksgiving'); s.reference=entry.thanksgiving; s.content=''; fetchTargets.push({ id: pp.id, key:'thanksgiving' }); }
-    if(entry.petitions){ const s=pp.sections.find(s=>s.key==='petitions'); s.reference=entry.petitions; }
+    if(entry.petitions){ const s=pp.sections.find(s=>s.key==='petitions'); s.reference=entry.petitions; s.content=''; fetchTargets.push({ id: pp.id, key:'petitions' }); }
   }
   setHymn('hymn4', entry.hymn4);
   const sermon = findByScheduleKey('sermon');
