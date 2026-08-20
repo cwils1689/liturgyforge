@@ -3552,16 +3552,16 @@ const PILLAR_REFORMED_CHURCH_TEMPLATE = [
         "reference": "1 Corinthians 11:23-24"
       },
       {
-        "type": "variant-text",
+        "type": "prayer",
         "title": "Blessing of the Bread",
-        "variants": [
+        "content": "Father, we thank you for this bread and the body of your Son. As truly as this bread arose from the earth, endured the furnace of affliction, and rose glorified for us to enjoy today, we remember and proclaim the same of our Savior. God, turn our hearts to be satisfied in our crucified and glorified Lord. In this bread, give us Christ. Amen.",
+        "savedVersions": [
           {
             "id": "bread-standard",
-            "label": "Standard",
+            "name": "Standard",
             "content": "Father, we thank you for this bread and the body of your Son. As truly as this bread arose from the earth, endured the furnace of affliction, and rose glorified for us to enjoy today, we remember and proclaim the same of our Savior. God, turn our hearts to be satisfied in our crucified and glorified Lord. In this bread, give us Christ. Amen."
           }
-        ],
-        "activeVariantId": "bread-standard"
+        ]
       },
       {
         "type": "hymn",
@@ -3583,16 +3583,16 @@ const PILLAR_REFORMED_CHURCH_TEMPLATE = [
         "reference": "1 Corinthians 11:25"
       },
       {
-        "type": "variant-text",
+        "type": "prayer",
         "title": "Blessing of the Wine",
-        "variants": [
+        "content": "O God, you give wine to gladden the heart of man. Grant us gladness of heart as we remember the blood of your Son that made full atonement for our sin. We give thanks and ask your blessing. In this cup, give us Christ.",
+        "savedVersions": [
           {
             "id": "wine-standard",
-            "label": "Standard",
+            "name": "Standard",
             "content": "O God, you give wine to gladden the heart of man. Grant us gladness of heart as we remember the blood of your Son that made full atonement for our sin. We give thanks and ask your blessing. In this cup, give us Christ."
           }
-        ],
-        "activeVariantId": "wine-standard"
+        ]
       },
       {
         "type": "hymn",
@@ -4488,6 +4488,7 @@ function renderElement(el, movement){
   } else if(el.type === 'rubric'){
     body = richEditorHtml(el.id, 'content', el.content, placeholderFor('rubric'), 'rich-editor-tall rubric-editor');
   } else if(el.type === 'prayer'){
+    mergePrayerLibraryIntoElement(el);
     const savedCount = (el.savedVersions || []).length;
     body = `
       <button type="button" class="series-picker-trigger prayer-picker-trigger" title="Pick a saved version of this prayer, or save what you've written" onclick="openPrayerPicker(this,'${el.id}')">${savedCount ? '📖 ' + savedCount + ' saved version' + (savedCount===1?'':'s') : '📖 Saved prayers…'} <span class="series-picker-caret">▾</span></button>
@@ -6354,6 +6355,10 @@ async function pullSharedDataOnSignIn(){
     ministerEmails = mergeFavoringContent(cloud.ministerEmails, ministerEmails);
     try{ localStorage.setItem('ministerEmails', JSON.stringify(ministerEmails)); }catch(e){}
   }
+  if(cloud.prayerLibrary){
+    prayerLibrary = mergeFavoringContent(cloud.prayerLibrary, prayerLibrary);
+    try{ localStorage.setItem('prayerLibrary', JSON.stringify(prayerLibrary)); }catch(e){}
+  }
   updateSyncStatusIndicator();
   if(cloud.sermonSeriesRoster){
     sermonSeriesRoster = mergeFavoringContent(cloud.sermonSeriesRoster, sermonSeriesRoster);
@@ -7270,9 +7275,9 @@ function saveSermonSeriesRoster(){
 --------------------------------------------------------------------- */
 const BACKUP_KEYS = ['liturgyArchive','liturgySchedule','ministerRoster','ministerColors',
   'ministerEmails','sermonSeriesRoster','liturgyTemplates','hymnTempoOverrides',
-  'scheduleColumnWidthOverrides','scheduleHiddenColumns','customLiturgicalResources','churchName'];
+  'scheduleColumnWidthOverrides','scheduleHiddenColumns','customLiturgicalResources','churchName','prayerLibrary'];
 const BACKUP_CLOUD_SHARED_KEYS = ['liturgySchedule','ministerRoster','ministerColors',
-  'ministerEmails','sermonSeriesRoster','liturgyTemplates','customLiturgicalResources','churchName'];
+  'ministerEmails','sermonSeriesRoster','liturgyTemplates','customLiturgicalResources','churchName','prayerLibrary'];
 
 function backupAllData(){
   const payload = { exportedAt: new Date().toISOString(), source: 'LiturgyForge — full data backup', data: {} };
@@ -7648,15 +7653,60 @@ async function renameSeriesEverywhere(oldName){
 }
 
 /* ---------------------------------------------------------------------
-   Prayer picker — a lightweight, per-element library of saved versions
-   for the "Prayer" element type. Deliberately
-   NOT a global/shared library: each prayer element (e.g. Blessing of
-   the Bread vs. Blessing of the Wine) keeps its own separate list, so
-   picking a saved version never shows options meant for a different
-   element. A new prayer element starts blank/unsaved and behaves like
-   a plain Text/Prayer box until something is actually saved to it.
+   Prayer picker — saved versions for the "Prayer" element type, kept in
+   a global library (prayerLibrary) keyed by the element's title (e.g.
+   "Blessing of the Bread" vs. "Blessing of the Wine" stay separate
+   lists, so picking a saved version never shows options meant for a
+   different prayer) rather than per-element-instance. That's what
+   makes a version saved on one service's "Blessing of the Bread" show
+   up as an option on every future service's "Blessing of the Bread"
+   too, not just the service it was saved in. el.savedVersions is kept
+   as a per-element mirror of the library entry (for the badge count
+   and offline display) and is merged from the library on every render.
+   A new prayer element starts blank/unsaved and behaves like a plain
+   Text/Prayer box until something is actually saved to it.
 --------------------------------------------------------------------- */
 let prayerPickerElId = null;
+let prayerLibrary = {};
+function loadPrayerLibrary(){
+  try{
+    const raw = localStorage.getItem('prayerLibrary');
+    if(raw) return JSON.parse(raw);
+  }catch(e){}
+  return {};
+}
+function savePrayerLibraryToStorage(){
+  try{ localStorage.setItem('prayerLibrary', JSON.stringify(prayerLibrary)); }catch(e){}
+  pushSharedDataToSupabase('prayerLibrary', prayerLibrary);
+}
+function prayerLibraryKey(title){
+  return (title || '').trim().toLowerCase();
+}
+// Pulls in any library versions this element is missing (by name) and
+// pushes any versions this element has that the library doesn't (e.g.
+// the "Standard" version baked into a built-in template) — called on
+// every render of a "prayer" element so the two stay in sync no matter
+// which side a version was added on.
+function mergePrayerLibraryIntoElement(el){
+  const key = prayerLibraryKey(el.title);
+  if(!key) return;
+  if(!el.savedVersions) el.savedVersions = [];
+  const libVersions = prayerLibrary[key] || [];
+  let libChanged = false;
+  libVersions.forEach(lv => {
+    if(!el.savedVersions.some(v => v.name === lv.name)) el.savedVersions.push({ ...lv });
+  });
+  el.savedVersions.forEach(v => {
+    if(!libVersions.some(lv => lv.name === v.name)){
+      libVersions.push({ id: v.id, name: v.name, content: v.content });
+      libChanged = true;
+    }
+  });
+  if(libVersions.length){
+    prayerLibrary[key] = libVersions;
+    if(libChanged) savePrayerLibraryToStorage();
+  }
+}
 
 function openPrayerPicker(triggerEl, elId){
   prayerPickerElId = elId;
@@ -7722,14 +7772,21 @@ async function savePrayerFromPicker(){
   const el = findEl(prayerPickerElId);
   if(!el) return;
   if(!el.savedVersions) el.savedVersions = [];
+  const key = prayerLibraryKey(el.title);
+  if(!prayerLibrary[key]) prayerLibrary[key] = [];
   const existing = el.savedVersions.find(v => v.name === name);
   if(existing){
-    const ok = await customConfirm(`"${name}" is already saved for this prayer. Overwrite it with the current text?`);
+    const ok = await customConfirm(`"${name}" is already saved for this prayer. Overwrite it with the current text? This updates it everywhere this prayer is used.`);
     if(!ok) return;
     existing.content = el.content;
   } else {
     el.savedVersions.push({ id:'pv' + Date.now() + Math.random().toString(36).slice(2,6), name, content: el.content });
   }
+  const saved = el.savedVersions.find(v => v.name === name);
+  const libEntry = prayerLibrary[key].find(v => v.name === name);
+  if(libEntry) libEntry.content = saved.content;
+  else prayerLibrary[key].push({ id: saved.id, name: saved.name, content: saved.content });
+  savePrayerLibraryToStorage();
   render();
   const freshTrigger = document.querySelector(`.element-card[data-id="${prayerPickerElId}"] .prayer-picker-trigger`);
   if(freshTrigger) openPrayerPicker(freshTrigger, prayerPickerElId);
@@ -7739,9 +7796,15 @@ async function deleteSavedPrayer(versionId){
   if(!el || !el.savedVersions) return;
   const v = el.savedVersions.find(v => v.id === versionId);
   if(!v) return;
-  const ok = await customConfirm(`Delete the saved version "${v.name}"? This can't be undone.`);
+  const ok = await customConfirm(`Delete the saved version "${v.name}"? This can't be undone — it will be removed everywhere this prayer is used.`);
   if(!ok) return;
   el.savedVersions = el.savedVersions.filter(x => x.id !== versionId);
+  const key = prayerLibraryKey(el.title);
+  if(prayerLibrary[key]){
+    prayerLibrary[key] = prayerLibrary[key].filter(x => x.name !== v.name);
+    if(!prayerLibrary[key].length) delete prayerLibrary[key];
+    savePrayerLibraryToStorage();
+  }
   render();
   const freshTrigger = document.querySelector(`.element-card[data-id="${prayerPickerElId}"] .prayer-picker-trigger`);
   if(freshTrigger) openPrayerPicker(freshTrigger, prayerPickerElId);
@@ -9787,6 +9850,7 @@ function formatLastUsed(dateStr){
 ministerRoster = loadMinisterRoster();
 ministerColors = loadMinisterColors();
 ministerEmails = loadMinisterEmails();
+prayerLibrary = loadPrayerLibrary();
 scheduleData = loadSchedule();
 sermonSeriesRoster = loadSermonSeriesRoster();
 liturgyTemplates = loadLiturgyTemplates();
