@@ -4106,10 +4106,32 @@ let builderIsPristine = true;
 function migrateElementType(type){
   return type;
 }
+// One-off data fix: earlier data (the Pillar Reformed Church example
+// template, and — for a while — real Covenant Renewal Worship services
+// seeded/synced from it) had "Blessing of the Bread"/"Blessing of the
+// Wine" mistakenly typed as Collect ("variant-text") instead of Prayer.
+// Runs on every load path (template apply, date load, archive load,
+// imported file) so already-seeded/synced/archived copies get corrected
+// too, not just the built-in template source.
+function migrateElement(e){
+  if(e.type === 'variant-text' && Array.isArray(e.variants) &&
+     (e.title === 'Blessing of the Bread' || e.title === 'Blessing of the Wine')){
+    const activeId = e.activeVariantId || (e.variants[0] && e.variants[0].id);
+    const active = e.variants.find(v => v.id === activeId) || e.variants[0];
+    const { variants, activeVariantId, ...rest } = e;
+    return {
+      ...rest,
+      type: 'prayer',
+      content: active ? active.content : (e.content || ''),
+      savedVersions: variants.map(v => ({ id: v.id, name: v.label, content: v.content }))
+    };
+  }
+  return { ...e, type: migrateElementType(e.type) };
+}
 function loadStateFromTemplate(template){
   state = template.map(m => ({
     key:m.key, label:m.label, color:m.color, defaultMinister:m.defaultMinister || '', icon:m.icon || '',
-    elements: m.elements.map(e => ({ id:newId(), ...e, type: migrateElementType(e.type) }))
+    elements: m.elements.map(e => ({ ...migrateElement(e), id:newId() }))
   }));
 }
 
@@ -5205,6 +5227,34 @@ function seedPillarTemplateOnce(){
     }
   }catch(e){}
 }
+// One-off repair pass: earlier versions of the Pillar Reformed Church
+// example template (and, for a while, real Covenant Renewal Worship data
+// seeded from it before this was caught) had "Blessing of the Bread"/
+// "Blessing of the Wine" mistakenly typed as Collect ("variant-text")
+// instead of Prayer. loadStateFromTemplate() et al. already correct this
+// on the fly for whatever's currently open in the Builder (see
+// migrateElement), but the *stored* template needs fixing too, or every
+// future service built from it just inherits the same mistake again.
+function migrateStoredTemplates(){
+  let changed = false;
+  try{
+    Object.keys(liturgyTemplates).forEach(name => {
+      const movements = liturgyTemplates[name];
+      if(!Array.isArray(movements)) return;
+      movements.forEach(m => {
+        if(!Array.isArray(m.elements)) return;
+        m.elements.forEach((el, i) => {
+          if(el.type === 'variant-text' && Array.isArray(el.variants) &&
+             (el.title === 'Blessing of the Bread' || el.title === 'Blessing of the Wine')){
+            m.elements[i] = migrateElement(el);
+            changed = true;
+          }
+        });
+      });
+    });
+    if(changed) saveLiturgyTemplatesToStorage();
+  }catch(e){}
+}
 function captureCurrentAsTemplateData(){
   // Same shape loadStateFromTemplate expects (and DEFAULT_TEMPLATE is
   // already in) — strip the runtime-only `id` off each element so a
@@ -5897,7 +5947,7 @@ document.getElementById('loadInput').addEventListener('change', function(e){
       saveSermonSeriesRoster();
       state = data.movements.map(m => ({
         ...m,
-        elements: m.elements.map(el => ({ ...el, id: newId(), type: migrateElementType(el.type) }))
+        elements: m.elements.map(el => ({ ...migrateElement(el), id: newId() }))
       }));
       render();
     }catch(err){
@@ -6060,7 +6110,7 @@ async function onDateChange(){
     document.getElementById('serviceTitle').value = snap.serviceTitle || '';
     state = snap.movements.map(m => ({
       ...m,
-      elements: m.elements.map(el => ({ ...el, id: newId(), type: migrateElementType(el.type) }))
+      elements: m.elements.map(el => ({ ...migrateElement(el), id: newId() }))
     }));
     currentLoadedDate = dateStr;
     document.getElementById('mainColorDot').innerHTML = scheduleColorDotHtml(dateStr);
@@ -6367,6 +6417,7 @@ async function pullSharedDataOnSignIn(){
   if(cloud.liturgyTemplates){
     liturgyTemplates = mergeFavoringContent(cloud.liturgyTemplates, liturgyTemplates);
     try{ localStorage.setItem('liturgyTemplates', JSON.stringify(liturgyTemplates)); }catch(e){}
+    migrateStoredTemplates();
   }
   if(cloud.customLiturgicalResources){
     saveCustomLiturgicalResources(mergeFavoringContent(cloud.customLiturgicalResources, getCustomLiturgicalResources()));
@@ -9781,7 +9832,7 @@ async function checkForAutosaveRestore(){
   builderIsPristine = false;
   state = snap.movements.map(m => ({
     ...m,
-    elements: m.elements.map(el => ({ ...el, id: newId(), type: migrateElementType(el.type) }))
+    elements: m.elements.map(el => ({ ...migrateElement(el), id: newId() }))
   }));
   render();
   updateCurrentDateDisplay();
@@ -9856,6 +9907,7 @@ sermonSeriesRoster = loadSermonSeriesRoster();
 liturgyTemplates = loadLiturgyTemplates();
 defaultTemplateName = loadDefaultTemplateName();
 seedPillarTemplateOnce();
+migrateStoredTemplates();
 seedGenericTemplatesOnce();
 renderMinisterChips();
 document.getElementById('churchEyebrow').innerText = loadChurchName();
