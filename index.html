@@ -6083,9 +6083,16 @@ function saveCurrentLiturgyToArchive(dateStr){
 async function onDateChange(){
   const dateStr = document.getElementById('serviceDate').value;
   if(!dateStr) return;
+  // Re-"opening" the date that's already loaded (e.g. clicking it again in
+  // the Services panel) used to still fall through to the cloud fetch below
+  // and blindly replace `state` with whatever's currently in Supabase —
+  // discarding any local edits from the last few seconds that hadn't
+  // autosaved yet, with nothing having asked to overwrite them. There's
+  // nothing to open that isn't already open, so just no-op.
+  if(dateStr === currentLoadedDate) return;
   builderIsPristine = false;
 
-  if(currentLoadedDate && currentLoadedDate !== dateStr){
+  if(currentLoadedDate){
     saveCurrentLiturgyToArchive(currentLoadedDate);
   }
 
@@ -6245,7 +6252,61 @@ async function restoreSupabaseSession(){
    That's intentional — for this app, silently losing content is a much
    worse failure than a cleared field reappearing and needing to be
    deleted again.
+
+   Arrays of movements/elements are matched by stable identity (a
+   movement's `key`, an element's `scheduleKey`, or its `type`+`title`)
+   rather than raw array position — element ids are regenerated fresh
+   every time a snapshot loads (see onDateChange), so two browsers'
+   in-memory ids never correspond to each other and can't be used to
+   line items up. Without identity matching, any element added/removed
+   on either side (shifting array length, or just order) caused this to
+   either zip mismatched elements together by index or discard one
+   side's whole array outright — silently losing unrelated content
+   (e.g. a freshly-typed Prayer of Confession) that just happened to be
+   sitting in the same movement as the actual conflict.
 --------------------------------------------------------------------- */
+function objectMergeSignature(obj){
+  if(!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
+  if(obj.scheduleKey) return 'sk:' + obj.scheduleKey;
+  if(obj.key) return 'key:' + obj.key; // movements
+  if(obj.type || obj.title) return 'tt:' + (obj.type || '') + '|' + (obj.title || '');
+  return null;
+}
+function mergeObjectArrayByIdentity(cloudArr, localArr){
+  const localBySig = new Map();
+  localArr.forEach(item => {
+    const sig = objectMergeSignature(item);
+    if(sig === null) return; // no reliable identity — handled in the union pass below
+    if(!localBySig.has(sig)) localBySig.set(sig, []);
+    localBySig.get(sig).push(item);
+  });
+  const consumed = new Map();
+  const result = [];
+  cloudArr.forEach(cItem => {
+    const sig = objectMergeSignature(cItem);
+    const bucket = sig !== null ? localBySig.get(sig) : null;
+    const idx = bucket ? (consumed.get(sig) || 0) : -1;
+    if(bucket && idx < bucket.length){
+      result.push(mergeFavoringContent(cItem, bucket[idx]));
+      consumed.set(sig, idx + 1);
+    } else {
+      // No local counterpart (this device hasn't seen it, or it's a
+      // teammate's addition) — keep it rather than drop it.
+      result.push(cItem);
+    }
+  });
+  // Anything on the local side left unmatched — new local elements the
+  // cloud copy doesn't know about yet, plus anything with no identity
+  // signature at all (always kept, since it can't be safely paired).
+  localArr.forEach(item => {
+    const sig = objectMergeSignature(item);
+    if(sig === null){ result.push(item); return; }
+    const bucket = localBySig.get(sig);
+    const idx = consumed.get(sig) || 0;
+    if(idx < bucket.length){ result.push(bucket[idx]); consumed.set(sig, idx + 1); }
+  });
+  return result;
+}
 function mergeFavoringContent(cloudVal, localVal){
   if(localVal === undefined || localVal === null) return cloudVal;
   if(cloudVal === undefined || cloudVal === null) return localVal;
@@ -6258,12 +6319,16 @@ function mergeFavoringContent(cloudVal, localVal){
     return merged;
   }
   if(Array.isArray(cloudVal) && Array.isArray(localVal)){
+    if(cloudVal.every(isPlainObj) && localVal.every(isPlainObj) &&
+       (cloudVal.some(v => objectMergeSignature(v) !== null) || localVal.some(v => objectMergeSignature(v) !== null))){
+      return mergeObjectArrayByIdentity(cloudVal, localVal);
+    }
     if(cloudVal.length === localVal.length){
       return cloudVal.map((cv, i) => mergeFavoringContent(cv, localVal[i]));
     }
-    // Lengths differ (an item was added/removed) — index-by-index
-    // merging would line up the wrong elements, so just keep whichever
-    // whole array has more content rather than guessing.
+    // Lengths differ and items can't be individually identified (plain
+    // strings/numbers) — matching item-by-item would risk pairing the
+    // wrong values, so just keep whichever whole array has more content.
     const richness = v => { try{ return JSON.stringify(v).length; }catch(e){ return 0; } };
     return richness(localVal) >= richness(cloudVal) ? localVal : cloudVal;
   }
@@ -6760,20 +6825,23 @@ async function fetchEsvForReading(id, key){
    error popups) and never overwrites text that's already there,
    so it can't clobber something you pasted or edited by hand.
 --------------------------------------------------------------------- */
-async function autoFetchEsvForElement(id){
+async function autoFetchEsvForElement(id, force){
   const el = findEl(id);
-  if(!el || el.content || !el.reference || !el.reference.trim() || !bibleFetchReady()) return;
+  if(!el || (el.content && !force) || !el.reference || !el.reference.trim() || !bibleFetchReady()) return;
   const text = await fetchBiblePassage(el.reference, true);
+  // Only overwrite on a successful fetch — a failed one (rate limit, network
+  // blip, bad reference) must leave whatever text was already there alone
+  // rather than trading it for a blank field.
   if(text){ el.content = text; render(); }
 }
 
-async function autoFetchEsvForReading(id, key){
+async function autoFetchEsvForReading(id, key, force){
   const el = findEl(id);
   if(!el) return;
   const list = el.readings || el.sections;
   if(!list) return;
   const r = list.find(r => r.key === key);
-  if(!r || r.content || !r.reference || !r.reference.trim() || !bibleFetchReady()) return;
+  if(!r || (r.content && !force) || !r.reference || !r.reference.trim() || !bibleFetchReady()) return;
   const text = await fetchBiblePassage(r.reference, true);
   if(text){
     r.content = text;
@@ -6880,6 +6948,39 @@ function saveMinisterEmails(){
   try{ localStorage.setItem('ministerEmails', JSON.stringify(ministerEmails)); }catch(e){}
   pushSharedDataToSupabase('ministerEmails', ministerEmails);
 }
+/* ---------------------------------------------------------------------
+   Mid-session refresh for the shared roster data (minister roster,
+   colors, linked login emails, sermon series) — this used to only ever
+   sync down once, at sign-in (see pullSharedDataOnSignIn), so a name,
+   color, or series another signed-in device added stayed invisible here
+   until this browser signed out and back in. Deliberately narrower than
+   pullSharedDataOnSignIn: nothing here touches the open liturgy's
+   `state`, so — unlike that function's unconditional whole-Builder
+   render() — it's safe to run on a timer without risking a disruptive
+   re-render while someone's mid-edit elsewhere in the Builder.
+--------------------------------------------------------------------- */
+async function syncRosterDataFromCloud(){
+  if(!sbClient || !currentUser) return;
+  const cloud = await fetchAllSharedDataFromSupabase();
+  if(cloud.ministerRoster){
+    ministerRoster = mergeFavoringContent(cloud.ministerRoster, ministerRoster);
+    try{ localStorage.setItem('ministerRoster', JSON.stringify(ministerRoster)); }catch(e){}
+  }
+  if(cloud.ministerColors){
+    ministerColors = mergeFavoringContent(cloud.ministerColors, ministerColors);
+    try{ localStorage.setItem('ministerColors', JSON.stringify(ministerColors)); }catch(e){}
+  }
+  if(cloud.ministerEmails){
+    ministerEmails = mergeFavoringContent(cloud.ministerEmails, ministerEmails);
+    try{ localStorage.setItem('ministerEmails', JSON.stringify(ministerEmails)); }catch(e){}
+  }
+  if(cloud.sermonSeriesRoster){
+    sermonSeriesRoster = mergeFavoringContent(cloud.sermonSeriesRoster, sermonSeriesRoster);
+    try{ localStorage.setItem('sermonSeriesRoster', JSON.stringify(sermonSeriesRoster)); }catch(e){}
+  }
+  if(document.getElementById('ministersOverlay')?.classList.contains('open')) renderMinisterChips();
+}
+setInterval(syncRosterDataFromCloud, 60000);
 async function editMinisterEmail(name){
   const current = ministerEmails[name] || '';
   const input = await customPrompt(`Login email for ${name} (optional — links their account so they can be assigned services; leave blank to unlink):`, current);
@@ -7576,6 +7677,14 @@ function openSeriesPicker(triggerEl, currentValue, applyFn){
   seriesPickerApply = applyFn;
   const pop = document.getElementById('seriesPickerPopover');
   renderSeriesPickerList(currentValue || '');
+  if(currentUser){
+    // Refresh from the cloud in case another device added a series since
+    // our last sync, then redraw the list in place if the popover is
+    // still open (re-picks up whatever's now selected via the DOM).
+    syncRosterDataFromCloud().then(() => {
+      if(pop.style.display === 'block') renderSeriesPickerList(currentValue || '');
+    });
+  }
   pop.style.display = 'block';
   const rect = triggerEl.getBoundingClientRect();
   const popRect = pop.getBoundingClientRect();
@@ -9188,7 +9297,10 @@ function toggleMinistersPanel(){
   const overlay = document.getElementById('ministersOverlay');
   const opening = !overlay.classList.contains('open');
   overlay.classList.toggle('open');
-  if(opening) renderMinisterChips();
+  if(opening){
+    renderMinisterChips();
+    syncRosterDataFromCloud();
+  }
 }
 function ministersOverlayOutsideClick(e){
   if(e.target === document.getElementById('ministersOverlay')) toggleMinistersPanel();
@@ -9600,11 +9712,16 @@ async function applyScheduleForDate(dateStr){
   const entry = scheduleData[dateStr];
   if(!entry) return;
 
+  // Content is never blanked here up front — a schedule-driven reference
+  // change queues a *forced* refetch below, but the old text stays in place
+  // until that fetch actually succeeds. If it fails (rate limit, network
+  // blip, bad reference) the field keeps showing what it had rather than
+  // going blank with no fetch error surfaced (autoFetchEsvFor* fail silently).
   const fetchTargets = [];
   const setRef = (key, value) => {
     if(value){
       const el = findByScheduleKey(key);
-      if(el){ el.reference = value; el.content = ''; fetchTargets.push({ id: el.id }); }
+      if(el && el.reference !== value){ el.reference = value; fetchTargets.push({ id: el.id }); }
     }
   };
   const setHymn = (key, value) => {
@@ -9632,9 +9749,9 @@ async function applyScheduleForDate(dateStr){
   setMinister('lectionaryReader', entry.lectionaryReader);
   const pp = findByScheduleKey('pastoralPrayer');
   if(pp && pp.sections){
-    if(entry.opening){ const s=pp.sections.find(s=>s.key==='opening'); s.reference=entry.opening; s.content=''; fetchTargets.push({ id: pp.id, key:'opening' }); }
-    if(entry.thanksgiving){ const s=pp.sections.find(s=>s.key==='thanksgiving'); s.reference=entry.thanksgiving; s.content=''; fetchTargets.push({ id: pp.id, key:'thanksgiving' }); }
-    if(entry.petitions){ const s=pp.sections.find(s=>s.key==='petitions'); s.reference=entry.petitions; s.content=''; fetchTargets.push({ id: pp.id, key:'petitions' }); }
+    if(entry.opening){ const s=pp.sections.find(s=>s.key==='opening'); if(s.reference!==entry.opening){ s.reference=entry.opening; fetchTargets.push({ id: pp.id, key:'opening' }); } }
+    if(entry.thanksgiving){ const s=pp.sections.find(s=>s.key==='thanksgiving'); if(s.reference!==entry.thanksgiving){ s.reference=entry.thanksgiving; fetchTargets.push({ id: pp.id, key:'thanksgiving' }); } }
+    if(entry.petitions){ const s=pp.sections.find(s=>s.key==='petitions'); if(s.reference!==entry.petitions){ s.reference=entry.petitions; fetchTargets.push({ id: pp.id, key:'petitions' }); } }
   }
   setHymn('hymn4', entry.hymn4);
   const sermon = findByScheduleKey('sermon');
@@ -9675,7 +9792,7 @@ async function applyScheduleForDate(dateStr){
         const active = el.variants.find(v => v.id === el.activeVariantId) || el.variants[0];
         if(active) active.content = value;
       } else if(el.type === 'scripture'){
-        if(value){ el.reference = value; el.content = ''; fetchTargets.push({ id: el.id }); }
+        if(value && el.reference !== value){ el.reference = value; fetchTargets.push({ id: el.id }); }
       } else if(value !== undefined){
         el.content = value;
       }
@@ -9686,8 +9803,8 @@ async function applyScheduleForDate(dateStr){
   // requests to Crossway's API at once risks tripping their rate limit, which
   // was making every fetch fail, not just the schedule-triggered ones.
   for(const t of fetchTargets){
-    if(t.key) await autoFetchEsvForReading(t.id, t.key);
-    else await autoFetchEsvForElement(t.id);
+    if(t.key) await autoFetchEsvForReading(t.id, t.key, true);
+    else await autoFetchEsvForElement(t.id, true);
   }
 }
 
@@ -9779,7 +9896,56 @@ function performAutosave(){
     archive[dateStr] = snapshot;
     localStorage.setItem('liturgyArchive', JSON.stringify(archive));
   }catch(e){}
-  pushLiturgyToSupabase(dateStr, snapshot);
+  pushLiturgyToSupabase(dateStr, snapshot).then(pushedMerged => reconcileLiturgyFromCloud(dateStr, pushedMerged));
+  lastSavedSnapshotJSON = buildCurrentSnapshotJSON();
+}
+/* ---------------------------------------------------------------------
+   Pull-back half of the autosave cycle. Until now, autosave only ever
+   pushed outward — merged favoring THIS device's content, but never
+   folded anything back in — so a browser left open on one date for a
+   while had no way to learn about edits another signed-in device made
+   to that same service, and its own next push (still favoring local on
+   any non-blank conflict) could silently re-assert its stale copy over
+   a teammate's newer one. pushLiturgyToSupabase() above already folds
+   this device's edits into the cloud row, so it's now safe to fold the
+   *cloud* result back into `state` — this time favoring the cloud side
+   — closing the loop within one ~8s tick instead of only ever pushing.
+   Skipped entirely while the user has a field focused, so it can never
+   yank a cursor or in-progress keystroke out from under them; it just
+   waits for the next tick once they pause.
+--------------------------------------------------------------------- */
+function isActivelyEditingField(){
+  const ae = document.activeElement;
+  if(!ae) return false;
+  return ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT' || ae.isContentEditable;
+}
+function reconcileLiturgyFromCloud(dateStr, pushedMerged){
+  if(!pushedMerged || !pushedMerged.movements) return;
+  if(document.getElementById('serviceDate')?.value !== dateStr) return; // switched dates mid-round-trip
+  if(isActivelyEditingField()) return; // don't disrupt typing — retry next tick
+  const localSide = {
+    churchTitle: document.getElementById('churchTitle').innerText,
+    serviceTitle: document.getElementById('serviceTitle').value,
+    movements: state
+  };
+  const cloudSide = {
+    churchTitle: pushedMerged.churchTitle,
+    serviceTitle: pushedMerged.serviceTitle,
+    movements: pushedMerged.movements
+  };
+  // Argument order intentionally reversed from every other call in this
+  // file — mergeFavoringContent's second argument wins a conflict, and
+  // here that should be the cloud side, not local.
+  const reconciled = mergeFavoringContent(localSide, cloudSide);
+  const withoutIds = arr => JSON.stringify(arr, (k, v) => k === 'id' ? undefined : v);
+  if(withoutIds(reconciled.movements) === withoutIds(state)) return; // nothing actually changed
+  state = reconciled.movements.map(m => ({
+    ...m,
+    elements: m.elements.map(el => ({ ...migrateElement(el), id: newId() }))
+  }));
+  if(reconciled.churchTitle !== undefined) document.getElementById('churchTitle').innerText = reconciled.churchTitle;
+  if(reconciled.serviceTitle !== undefined) document.getElementById('serviceTitle').value = reconciled.serviceTitle;
+  render();
   lastSavedSnapshotJSON = buildCurrentSnapshotJSON();
 }
 setInterval(performAutosave, 8000);
@@ -9787,6 +9953,16 @@ setInterval(refreshNotifications, 60000);
 window.addEventListener('beforeunload', function(){
   performAutosave();
   try{ localStorage.setItem('lastSessionClean', '1'); }catch(e){}
+});
+// iOS Safari (i.e. every iPad this app runs on) frequently suspends a tab
+// the moment it's backgrounded — home button, app switch, screen lock —
+// without ever firing 'beforeunload', so the cloud push above can't be
+// relied on to catch that case. 'visibilitychange' does fire at that
+// moment, so mirror the same save there too: a moment's head start before
+// the tab is actually torn down is the difference between an in-flight
+// Supabase request completing or getting cut off mid-request.
+document.addEventListener('visibilitychange', function(){
+  if(document.hidden) performAutosave();
 });
 // Standard browser "Leave site? Changes you made may not be saved" prompt —
 // covers back-navigation, tab close, and refresh alike. Browsers show their
