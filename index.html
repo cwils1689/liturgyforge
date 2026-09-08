@@ -593,17 +593,39 @@
     outline:none; white-space:pre-wrap; margin-bottom:6px;
   }
   .rich-editor:focus{ border-color:var(--ink-soft); }
-  .rich-editor:empty:before{ content:attr(data-placeholder); color:var(--ink-faint); font-style:italic; }
+  .rich-editor:empty:before,
+  .rich-editor.rich-editor-blank:before{ content:attr(data-placeholder); color:var(--ink-faint); font-style:italic; }
   /* Incomplete-element warning: empty fields get a red border/tint as a
-     "fill this in" flag. Uses native :empty / :placeholder-shown states,
-     so it appears and clears live as content is typed — no extra JS. */
-  .rich-editor:empty{ border-color:#B3261E; background:rgba(179,38,30,0.05); }
+     "fill this in" flag. :empty catches a box that was never filled in;
+     .rich-editor-blank catches one the user has wiped out, since clearing a
+     contenteditable leaves a stray <br> behind that defeats :empty (see
+     isRichContentEmpty). Either way it clears live as real text is typed. */
+  .rich-editor:empty,
+  .rich-editor.rich-editor-blank{ border-color:#B3261E; background:rgba(179,38,30,0.05); }
   .reference-input:placeholder-shown,
   .hymn-number-input:placeholder-shown,
   .hymn-title-input:placeholder-shown{ border-color:#B3261E; background:rgba(179,38,30,0.05); }
   .rich-editor ol, .rich-editor ul{ margin:4px 0; padding-left:22px; }
   .rich-editor li{ margin-bottom:2px; }
   .rich-editor mark{ background:#fff59d; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  /* -----------------------------------------------------------------
+     Text colors from the floating format toolbar. Content stores a
+     <span> carrying one of these class names — never an inline style —
+     so sanitizeRichNode() stays a strict allow-list and pasted markup
+     can't smuggle arbitrary CSS in. One rule set covers every place
+     content HTML renders: the Builder editors, the print/PDF output,
+     and Presentation Mode. print-color-adjust keeps browsers from
+     dropping the color when printing, same as the highlight above.
+     Keep these in step with RICH_TEXT_COLORS in the script below —
+     that's where the matching DOCX hex values live.
+  ----------------------------------------------------------------- */
+  .rt-color-red{ color:#B3261E; }
+  .rt-color-blue{ color:#1A56A8; }
+  .rt-color-green{ color:#1F6B3A; }
+  .rt-color-black{ color:#1B2A45; }
+  .rt-color-red, .rt-color-blue, .rt-color-green, .rt-color-black{
+    -webkit-print-color-adjust:exact; print-color-adjust:exact;
+  }
   .rich-editor-tall{ min-height:110px; }
   .rich-editor-inline{
     flex:1; min-height:auto; padding:6px 8px; font-size:13px; margin-bottom:0;
@@ -800,6 +822,7 @@
   .live-mode-overlay{
     display:none; position:fixed; inset:0; z-index:5000;
     background:#fdfbf6; flex-direction:column;
+    overscroll-behavior:none;
   }
   .live-mode-overlay.open{ display:flex; }
   .live-mode-overlay.dark{ background:#15130f; }
@@ -837,6 +860,17 @@
     flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch;
     padding:28px 24px 100px; max-width:760px; margin:0 auto; width:100%;
     box-sizing:border-box; font-size:18px;
+    /* Keep an overscroll at the top or bottom inside this box. Without it iOS
+       hands the leftover drag to the page behind, which in a home-screen PWA
+       is the pull-to-refresh gesture — dragging down at the top of the
+       liturgy reloaded the app mid-service and dumped the reader back out of
+       Presentation Mode. Paired with the body lock in openLiveMode() for
+       older iOS versions that predate overscroll-behavior. */
+    overscroll-behavior:contain;
+  }
+  /* Body lock while Presentation Mode is open — see setLiveModeBodyLock(). */
+  body.live-mode-locked{
+    position:fixed; width:100%; overflow:hidden;
   }
   .live-mode-scroll.size-sm{ font-size:15px; }
   .live-mode-scroll.size-md{ font-size:18px; }
@@ -893,6 +927,13 @@
   .live-mode-body ol, .live-mode-body ul{ margin:0.3em 0; padding-left:1.4em; }
   .live-mode-body mark{ background:#fff59d; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
   .live-mode-overlay.dark .live-mode-body mark{ background:#7a6a2a; color:#fff; }
+  /* Print-weight colors go muddy on the dark reading background — lift each
+     one, and let black fall back to the light default ink so colored text
+     stays readable when the iPad is in low-light mode. */
+  .live-mode-overlay.dark .rt-color-red{ color:#F08A81; }
+  .live-mode-overlay.dark .rt-color-blue{ color:#7FB0EE; }
+  .live-mode-overlay.dark .rt-color-green{ color:#78C695; }
+  .live-mode-overlay.dark .rt-color-black{ color:#f0ebdc; }
   .live-mode-response p{ margin:0.15em 0 0.7em; font-size:1em; line-height:1.7; white-space:pre-line; color:var(--ink); padding-left:4.8em; position:relative; }
   .live-mode-response p.footnote{ padding-left:0; }
   .live-mode-overlay.dark .live-mode-response p{ color:#f0ebdc; }
@@ -1141,6 +1182,25 @@
   .floating-toolbar button:hover{ background:rgba(255,255,255,0.18); }
   .floating-toolbar .rt-highlight-btn{ background:rgba(255,245,157,0.25); }
   .floating-toolbar .rt-highlight-btn:hover{ background:rgba(255,245,157,0.4); }
+  .floating-toolbar .rt-color-sep{
+    width:1px; align-self:stretch; margin:2px 3px; background:rgba(255,255,255,0.22);
+  }
+  .floating-toolbar .rt-color-btn{ width:22px; }
+  /* The swatch face is lifted off the print color so it stays visible against
+     the toolbar's dark ground; the color actually applied is the one in
+     RICH_TEXT_COLORS. The ring keeps the near-black swatch findable. */
+  .floating-toolbar .rt-color-btn::before{
+    content:''; width:13px; height:13px; border-radius:50%;
+    background:currentColor; border:1px solid rgba(255,255,255,0.6);
+  }
+  .floating-toolbar .rt-swatch-red{ color:#E4564D; }
+  .floating-toolbar .rt-swatch-blue{ color:#5B93DE; }
+  .floating-toolbar .rt-swatch-green{ color:#3F9E63; }
+  .floating-toolbar .rt-swatch-black{ color:#1B2A45; }
+  /* Colors need real markup to hang on, so they're hidden over the Planner's
+     plain textareas, where the toolbar writes marker syntax instead. */
+  .floating-toolbar.rt-no-color .rt-color-btn,
+  .floating-toolbar.rt-no-color .rt-color-sep{ display:none; }
   .series-picker-trigger{
     font-family:'Inter',sans-serif; font-size:11.5px; font-weight:600;
     border:1px solid var(--border); background:#fff; color:var(--ink-soft);
@@ -1698,6 +1758,11 @@
     <button type="button" onmousedown="event.preventDefault()" onclick="applyFloatingFormat('__','__')" title="Underline"><u>U</u></button>
     <button type="button" onmousedown="event.preventDefault()" onclick="applyFloatingFormat('~~','~~')" title="Strikethrough"><s>S</s></button>
     <button type="button" onmousedown="event.preventDefault()" onclick="applyFloatingFormat('==','==')" title="Highlight" class="rt-highlight-btn">H</button>
+    <span class="rt-color-sep"></span>
+    <button type="button" class="rt-color-btn rt-swatch-red" onmousedown="event.preventDefault()" onclick="applyRichTextColor('red')" title="Red text"></button>
+    <button type="button" class="rt-color-btn rt-swatch-blue" onmousedown="event.preventDefault()" onclick="applyRichTextColor('blue')" title="Blue text"></button>
+    <button type="button" class="rt-color-btn rt-swatch-green" onmousedown="event.preventDefault()" onclick="applyRichTextColor('green')" title="Green text"></button>
+    <button type="button" class="rt-color-btn rt-swatch-black" onmousedown="event.preventDefault()" onclick="applyRichTextColor('black')" title="Black — the default text color"></button>
   </div>
 
   <div id="seriesPickerPopover" class="series-picker-popover"></div>
@@ -4324,7 +4389,17 @@ function plannerLinkSelectHtml(el){
   if(!PLANNER_LINKABLE_TYPES.has(el.type)) return '';
   const current = el.scheduleKey || '';
   const currentCol = scheduleColumns.find(c => c.key === current);
-  const options = scheduleColumns.map(c => `<option value="${escapeAttr(c.key)}" ${c.key===current?'selected':''}>${escapeHTML(c.label)}</option>`).join('');
+  const hiddenCols = loadHiddenScheduleColumns();
+  const options = scheduleColumns.map(c => `<option value="${escapeAttr(c.key)}" ${c.key===current?'selected':''}>${escapeHTML(c.label)}${hiddenCols.has(c.key) ? ' (hidden)' : ''}</option>`).join('');
+  // An element can outlive the column it points at — remove a column from the
+  // Planner and the link is still on the element, but with no matching option
+  // the dropdown falls back to showing "Not linked". Picking that then changes
+  // nothing (the value is already ''), so the link couldn't be cleared at all.
+  // Give the orphan its own option so the dropdown tells the truth and
+  // choosing "Not linked" actually fires a change.
+  const orphanOption = (current && !currentCol)
+    ? `<option value="${escapeAttr(current)}" selected>${escapeHTML(current)} (column removed)</option>`
+    : '';
   const badgeTitle = current
     ? `Linked to Planner column "${currentCol ? currentCol.label : current}". Click to change or unlink.`
     : 'Not linked to the Planner. Click to link this element to a column.';
@@ -4332,6 +4407,7 @@ function plannerLinkSelectHtml(el){
     <span class="planner-link-wrap">
       <select id="plannerLink-${el.id}" class="planner-link-select" tabindex="-1" onchange="updateField('${el.id}','scheduleKey',this.value)">
         <option value="" ${current?'':'selected'}>— Not linked to Planner —</option>
+        ${orphanOption}
         ${options}
       </select>
       <button type="button" class="planner-link-badge${current ? ' planner-link-badge-linked' : ''}" title="${escapeAttr(badgeTitle)}" onclick="openPlannerLinkPicker('${el.id}')">🔗</button>
@@ -4829,6 +4905,8 @@ function showFloatingToolbarFor(ta, x, y){
   if(ta.selectionStart === ta.selectionEnd){ hideFloatingToolbar(); return; }
   activeTextarea = ta;
   activeRichEditor = null;
+  // Toggled before positioning, since the toolbar is measured to center it.
+  document.getElementById('floatingToolbar').classList.add('rt-no-color');
   positionFloatingToolbar(x, y);
 }
 function showFloatingToolbarForRichEditor(editor, x, y){
@@ -4836,6 +4914,7 @@ function showFloatingToolbarForRichEditor(editor, x, y){
   if(!sel.rangeCount || sel.isCollapsed){ hideFloatingToolbar(); return; }
   activeRichEditor = editor;
   activeTextarea = null;
+  document.getElementById('floatingToolbar').classList.remove('rt-no-color');
   positionFloatingToolbar(x, y);
 }
 function hideFloatingToolbar(){
@@ -4871,6 +4950,81 @@ function wrapSelectionInMark(){
   const newRange = document.createRange();
   newRange.selectNodeContents(mark);
   sel.addRange(newRange);
+}
+/* ---------------------------------------------------------------------
+   Text color. The four palette entries below are the whole vocabulary —
+   anything else is stripped on the way into storage.
+
+   Applying one goes through document.execCommand('foreColor'), the same
+   deprecated-but-universal path bold/italic/underline already use here.
+   That's deliberate: the browser already knows how to split, merge and
+   replace styling across a selection that straddles other tags, which is
+   exactly the fiddly part. What it emits varies (a <font color> in some
+   browsers, a <span style> in others), so normalizeRichColorMarkup folds
+   whatever came out into our own class-based spans before it's saved.
+
+   Black is a real palette color rather than an "off" switch, so picking it
+   over red reliably wins — nested inside a red span it still overrides.
+   It's the app's own ink (--ink), not pure #000, so text set back to black
+   matches the uncolored text around it exactly.
+--------------------------------------------------------------------- */
+const RICH_TEXT_COLORS = {
+  red:   { css:'#B3261E', cls:'rt-color-red',   docx:'B3261E' },
+  blue:  { css:'#1A56A8', cls:'rt-color-blue',  docx:'1A56A8' },
+  green: { css:'#1F6B3A', cls:'rt-color-green', docx:'1F6B3A' },
+  black: { css:'#1B2A45', cls:'rt-color-black', docx:'1B2A45' },
+};
+const RICH_COLOR_CLASSES = new Set(Object.values(RICH_TEXT_COLORS).map(c => c.cls));
+const RICH_COLOR_DOCX = {};
+Object.values(RICH_TEXT_COLORS).forEach(c => { RICH_COLOR_DOCX[c.cls] = c.docx; });
+
+// Run any CSS color through the browser so '#B3261E', 'rgb(179,38,30)' and
+// whatever execCommand chose to emit all come back in one comparable form.
+function canonicalCssColor(value){
+  if(!value) return '';
+  const probe = document.createElement('span');
+  probe.style.color = value;
+  return probe.style.color;
+}
+function richColorClassFor(cssValue){
+  const target = canonicalCssColor(cssValue);
+  if(!target) return '';
+  const hit = Object.values(RICH_TEXT_COLORS).find(c => canonicalCssColor(c.css) === target);
+  return hit ? hit.cls : '';
+}
+// Fold every <font color> / inline color:… execCommand produced into a plain
+// <span class="rt-color-*">. Anything that isn't one of ours is unwrapped, so
+// no inline style ever reaches storage.
+function normalizeRichColorMarkup(root){
+  root.querySelectorAll('font[color], [style]').forEach(node => {
+    const raw = node.getAttribute('color') || node.style.color || '';
+    if(!raw) return;
+    const cls = richColorClassFor(raw);
+    const parent = node.parentNode;
+    if(!parent) return;
+    if(cls && node.tagName === 'SPAN' && node.attributes.length === 1){
+      node.removeAttribute('style');
+      node.className = cls;
+      return;
+    }
+    const replacement = cls ? document.createElement('span') : document.createDocumentFragment();
+    if(cls) replacement.className = cls;
+    while(node.firstChild) replacement.appendChild(node.firstChild);
+    parent.replaceChild(replacement, node);
+  });
+}
+function applyRichTextColor(key){
+  const entry = RICH_TEXT_COLORS[key];
+  // Plain textareas (the Planner's wide cells) hold marker text, not markup,
+  // and have nothing to hang a color on — the swatches are hidden there.
+  if(!entry || !activeRichEditor) return;
+  const sel = window.getSelection();
+  if(!sel.rangeCount || sel.isCollapsed) return;
+  try{ document.execCommand('styleWithCSS', false, true); }catch(e){}
+  document.execCommand('foreColor', false, entry.css);
+  normalizeRichColorMarkup(activeRichEditor);
+  persistRichEditorContent(activeRichEditor);
+  hideFloatingToolbar();
 }
 function applyFloatingFormat(before, after){
   if(activeRichEditor){
@@ -4981,6 +5135,21 @@ function sanitizeRichNode(node){
   Array.from(node.childNodes).forEach(child => {
     if(child.nodeType === Node.TEXT_NODE) return;
     if(child.nodeType !== Node.ELEMENT_NODE){ node.removeChild(child); return; }
+    // A <span> is kept only to carry one of our own text-color classes, and
+    // only that class survives — any other span (pasted markup, a leftover
+    // from the browser) is unwrapped exactly as before.
+    if(child.tagName === 'SPAN'){
+      const cls = child.getAttribute('class') || '';
+      while(child.attributes.length > 0) child.removeAttribute(child.attributes[0].name);
+      if(!RICH_COLOR_CLASSES.has(cls)){
+        while(child.firstChild) node.insertBefore(child.firstChild, child);
+        node.removeChild(child);
+        return;
+      }
+      child.setAttribute('class', cls);
+      sanitizeRichNode(child);
+      return;
+    }
     if(!RICH_ALLOWED_TAGS.has(child.tagName)){
       while(child.firstChild) node.insertBefore(child.firstChild, child);
       node.removeChild(child);
@@ -4990,9 +5159,22 @@ function sanitizeRichNode(node){
     sanitizeRichNode(child);
   });
 }
+// Emptying a contenteditable doesn't leave it actually empty — every browser
+// leaves a stray <br> (and sometimes an empty <div>/<p>) behind. That markup
+// still counted as content, so a box the user had typed in and then wiped
+// stored "<br>" instead of "", and both the red "fill this in" border and the
+// placeholder stayed off for good. Treat markup carrying no visible text as
+// empty, everywhere content is read in or written back out.
+function isRichContentEmpty(html){
+  if(!html) return true;
+  return !html.replace(/<[^>]*>/g, '').replace(/&nbsp;| /g, ' ').trim();
+}
 function normalizeInitialRichContent(content){
   if(!content) return '';
-  if(/<[a-zA-Z]/.test(content)) return sanitizeRichHTML(content);
+  if(/<[a-zA-Z]/.test(content)){
+    const clean = sanitizeRichHTML(content);
+    return isRichContentEmpty(clean) ? '' : clean; // also migrates already-stored "<br>"
+  }
   return formatMarkup(content); // one-time migration for any older plain-marker text
 }
 function richEditorHtml(id, target, content, placeholder, extraClass){
@@ -5003,7 +5185,11 @@ function richEditorHtml(id, target, content, placeholder, extraClass){
 function persistRichEditorContent(div){
   const id = div.dataset.id;
   const target = div.dataset.target || 'content';
-  const html = sanitizeRichHTML(div.innerHTML);
+  let html = sanitizeRichHTML(div.innerHTML);
+  if(isRichContentEmpty(html)) html = '';
+  // The stray <br> is still physically in the box while the caret is in it,
+  // so :empty can't fire — flag it with a class instead until blur clears it.
+  div.classList.toggle('rich-editor-blank', html === '');
   const el = findEl(id);
   if(!el) return;
   if(target.startsWith('section:')){
@@ -5091,6 +5277,7 @@ function handleRichEditorInput(e){
 }
 function handleRichEditorBlur(e){
   persistRichEditorContent(e.target);
+  if(isRichContentEmpty(e.target.innerHTML)) e.target.innerHTML = '';
 }
 function handleRichEditorKeydown(e){
   // Fix: pressing Backspace at the very start of the FIRST item in a
@@ -5469,7 +5656,7 @@ function docxPara(runsXml, opts){
 }
 
 // Rich-text HTML (our own sanitized allow-list: b/strong, i/em, u, s/strike/del,
-// mark, ol/ul/li, br, div, p) -> an array of paragraphs, each an array of
+// mark, ol/ul/li, br, div, p, plus a color-carrying span) -> an array of paragraphs, each an array of
 // {text, flags} runs. Block tags (p/div/li) start a new paragraph; br is a
 // soft line break folded into a hard paragraph break here for simplicity.
 function htmlToDocxParagraphs(html, baseFlags){
@@ -5511,6 +5698,20 @@ function htmlToDocxParagraphs(html, baseFlags){
             if(top.type === 'OL'){ top.n++; prefix = top.n + '. '; }
           }
           cur.push({ text: prefix, flags: curFlags() });
+        }
+      } else if(tag === 'SPAN'){
+        // The only span that survives sanitizing carries a text-color class
+        // (see RICH_COLOR_DOCX). Unlike the INLINE tags above these nest, so
+        // each one pushes its own scope and the closing tag pops the innermost
+        // — which is also what makes a color inside a color come out right.
+        if(closing){
+          for(let i = flagStack.length-1; i>=0; i--){
+            if(flagStack[i].spanScope){ flagStack.splice(i, 1); break; }
+          }
+        } else {
+          const cls = (tok.match(/class="([^"]*)"/) || [])[1] || '';
+          const hex = RICH_COLOR_DOCX[cls];
+          flagStack.push(hex ? { spanScope:true, color:hex } : { spanScope:true });
         }
       } else if(INLINE[tag]){
         const name = INLINE[tag];
@@ -5845,15 +6046,36 @@ function liveFontPopoverOutsideClick(e){
   const wrap = document.querySelector('.live-font-wrap');
   if(popover && wrap && !wrap.contains(e.target)) closeLiveFontPopover();
 }
+/* Pin the page behind the overlay while Presentation Mode is open. The
+   overlay is position:fixed, but the document underneath still scrolls, and
+   on iOS a drag that runs past the end of the liturgy carries on into that
+   document — which in a home-screen PWA triggers pull-to-refresh. Reported as
+   an older (iOS 16) iPad reloading, or dropping out of, Presentation Mode
+   when the reader scrolled up. position:fixed on the body loses the scroll
+   position, so it's stashed and put back on exit. */
+let liveModeSavedScrollY = 0;
+function setLiveModeBodyLock(locked){
+  if(locked){
+    liveModeSavedScrollY = window.scrollY || window.pageYOffset || 0;
+    document.body.style.top = (-liveModeSavedScrollY) + 'px';
+    document.body.classList.add('live-mode-locked');
+  } else if(document.body.classList.contains('live-mode-locked')){
+    document.body.classList.remove('live-mode-locked');
+    document.body.style.top = '';
+    window.scrollTo(0, liveModeSavedScrollY);
+  }
+}
 function openLiveMode(){
   document.getElementById('liveModeContent').innerHTML = buildLiveModeHTML();
   document.getElementById('liveModeOverlay').classList.add('open');
+  setLiveModeBodyLock(true);
   applyLiveModeSizeAndTheme();
   document.getElementById('liveModeContent').scrollTop = 0;
   requestLiveModeFullscreen();
 }
 function closeLiveMode(){
   document.getElementById('liveModeOverlay').classList.remove('open');
+  setLiveModeBodyLock(false);
   closeLiveFontPopover();
   exitLiveModeFullscreen();
 }
@@ -8445,21 +8667,38 @@ const PNG_SCORE_MAP = {"1":["1 Psalm 1 Becker.png"],"10":["10 Psalm 4 NCG.png"],
 
 let hymnPlayback = null; // { sampler, num }
 
+/* Barlines are the one place every part is guaranteed to line up, so note
+   times are collected per measure — a measure index plus an offset inside
+   that measure — and only turned into absolute time once every part has been
+   read. Running one continuous cursor per part (what this used to do) drifts
+   the moment a voice stops short of the barline: an inner alto written as a
+   plain half note in a dotted-half bar, with no closing rest, left that whole
+   staff a beat early from there to the end of the hymn, which is how treble
+   and bass came apart partway through 211 Let God Arise in All His Might (and
+   ~40 other files). Offsets are kept in quarter notes rather than raw
+   <divisions> ticks so parts with different divisions — or a divisions change
+   mid-piece — still land on one shared clock. */
 function parseMusicXML(xmlText){
   const doc = new DOMParser().parseFromString(xmlText, 'text/xml');
   if(doc.querySelector('parsererror')) throw new Error('Could not read the music data in this file.');
   const STEP_SEMITONE = { C:0, D:2, E:4, F:5, G:7, A:9, B:11 };
   const parts = Array.from(doc.querySelectorAll('part'));
   if(!parts.length) throw new Error('No musical parts found in this file.');
-  let tempo = 120;
-  const notes = [];
+  let scoreTempo = 120;      // first tempo seen anywhere; every part starts here
+  let scoreTempoFound = false;
+  const parsedParts = [];    // per part: [{ midi, measureIdx, offsetQ, durQ, tempo }]
+  const measureLengthQ = []; // longest reading of each measure, across all parts
 
   parts.forEach(part => {
     let divisions = 1;
-    let cursor = 0;
+    let tempo = scoreTempo;
+    let cursor = 0;      // divisions from the start of the current measure
     let lastDur = 0;
+    let measureEnd = 0;  // furthest point any voice reached in this measure
+    const partNotes = [];
     const measures = Array.from(part.querySelectorAll('measure'));
-    measures.forEach(measure => {
+    measures.forEach((measure, measureIdx) => {
+      cursor = 0; lastDur = 0; measureEnd = 0;
       Array.from(measure.children).forEach(node => {
         const tag = node.tagName;
         if(tag === 'attributes'){
@@ -8467,7 +8706,7 @@ function parseMusicXML(xmlText){
           if(divEl) divisions = parseFloat(divEl.textContent) || divisions;
         } else if(tag === 'sound' && node.hasAttribute('tempo')){
           const t = parseFloat(node.getAttribute('tempo'));
-          if(t) tempo = t;
+          if(t){ tempo = t; if(!scoreTempoFound){ scoreTempo = t; scoreTempoFound = true; } }
         } else if(tag === 'direction'){
           const soundEl = node.querySelector('sound[tempo]');
           if(soundEl){
@@ -8490,12 +8729,14 @@ function parseMusicXML(xmlText){
               }
             }
           }
+          if(!scoreTempoFound && tempo){ scoreTempo = tempo; scoreTempoFound = true; }
         } else if(tag === 'backup'){
           const dur = parseFloat(node.querySelector('duration')?.textContent || '0');
           cursor -= dur;
         } else if(tag === 'forward'){
           const dur = parseFloat(node.querySelector('duration')?.textContent || '0');
           cursor += dur;
+          if(cursor > measureEnd) measureEnd = cursor;
         } else if(tag === 'note'){
           const isChord = !!node.querySelector('chord');
           const isRest = !!node.querySelector('rest');
@@ -8516,15 +8757,45 @@ function parseMusicXML(xmlText){
                 const alterEl = pitchEl.querySelector('alter');
                 const alter = alterEl ? parseFloat(alterEl.textContent) : 0;
                 const midi = (octave + 1) * 12 + (STEP_SEMITONE[step] || 0) + alter;
-                notes.push({ midi, startDiv: startCursor, durDiv: Math.max(dur, 1), divisions, tempo });
+                partNotes.push({
+                  midi,
+                  measureIdx,
+                  offsetQ: Math.max(0, startCursor) / divisions,
+                  durQ: Math.max(dur, 1) / divisions,
+                  tempo
+                });
               }
             }
           }
-          if(!isChord){ cursor += dur; lastDur = dur; }
+          if(!isChord){
+            cursor += dur;
+            lastDur = dur;
+            if(cursor > measureEnd) measureEnd = cursor;
+          }
         }
       });
+      const lenQ = measureEnd / divisions;
+      if(!(measureLengthQ[measureIdx] >= lenQ)) measureLengthQ[measureIdx] = lenQ;
     });
+    parsedParts.push(partNotes);
   });
+
+  const measureStartQ = [];
+  let elapsedQ = 0;
+  for(let i = 0; i < measureLengthQ.length; i++){
+    measureStartQ[i] = elapsedQ;
+    elapsedQ += measureLengthQ[i] || 0;
+  }
+
+  const notes = [];
+  parsedParts.forEach(partNotes => partNotes.forEach(n => {
+    notes.push({
+      midi: n.midi,
+      startQ: (measureStartQ[n.measureIdx] || 0) + n.offsetQ,
+      durQ: n.durQ,
+      tempo: n.tempo
+    });
+  }));
 
   if(!notes.length) throw new Error('No playable notes were found in this file.');
   return notes;
@@ -8634,9 +8905,9 @@ async function playHymnAudio(num, isSpeedChange){
     const startTime = Tone.now() + 0.15;
     let maxEndSeconds = 0;
     notes.forEach(n => {
-      const secPerDiv = (60 / n.tempo) / n.divisions / hymnPlaybackSpeed;
-      const noteStartSec = n.startDiv * secPerDiv;
-      const noteDurSec = Math.max(0.06, n.durDiv * secPerDiv);
+      const secPerQuarter = (60 / n.tempo) / hymnPlaybackSpeed;
+      const noteStartSec = n.startQ * secPerQuarter;
+      const noteDurSec = Math.max(0.06, n.durQ * secPerQuarter);
       maxEndSeconds = Math.max(maxEndSeconds, noteStartSec + noteDurSec);
       sampler.triggerAttackRelease(midiToNoteName(n.midi), noteDurSec, startTime + noteStartSec);
     });
@@ -8908,9 +9179,18 @@ async function removeScheduleColumn(key){
   const ok = await customConfirm(`Remove the "${col.label}" column from the Planner? Any data already entered stays saved but will no longer be shown.`);
   if(!ok) return;
   scheduleColumns = scheduleColumns.filter(c => c.key !== key);
+  // Drop any Builder element pointing at the column too, so nothing is left
+  // linked to a column that no longer exists (see plannerLinkSelectHtml).
+  let unlinked = false;
+  for(const m of (state || [])){
+    for(const el of m.elements){
+      if(el.scheduleKey === key){ el.scheduleKey = ''; unlinked = true; }
+    }
+  }
   saveScheduleColumns();
   renderColumnPicker();
   renderScheduleTable();
+  if(unlinked) render();
 }
 function moveScheduleColumn(key, dir){
   const idx = scheduleColumns.findIndex(c => c.key === key);
