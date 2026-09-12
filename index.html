@@ -6300,7 +6300,7 @@ function saveCurrentLiturgyToArchive(dateStr){
     localStorage.setItem('liturgyArchive', JSON.stringify(archive));
     localStorage.setItem('currentAutosave', JSON.stringify(snapshot));
   }catch(e){}
-  pushLiturgyToSupabase(dateStr, snapshot);
+  pushLiturgyToSupabase(dateStr, snapshot, liturgyCloudBase[dateStr]);
 }
 async function onDateChange(){
   const dateStr = document.getElementById('serviceDate').value;
@@ -6321,6 +6321,7 @@ async function onDateChange(){
   let snap = null;
   if(currentUser){
     snap = await fetchLiturgyFromSupabase(dateStr);
+    setLiturgyCloudBase(dateStr, snap);
     if(snap){
       try{
         const archive = loadLiturgyArchive();
@@ -6486,36 +6487,63 @@ async function restoreSupabaseSession(){
    side's whole array outright — silently losing unrelated content
    (e.g. a freshly-typed Prayer of Confession) that just happened to be
    sitting in the same movement as the actual conflict.
+
+   Deletions: the optional `baseVal` is the cloud copy this device last
+   fully took in (see liturgyCloudBase). An element/movement that was in
+   that base but is now missing from one side was deliberately deleted
+   there, so it's dropped instead of kept. Without a base (undefined),
+   behavior is unchanged — keep everything.
 --------------------------------------------------------------------- */
 function objectMergeSignature(obj){
   if(!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
   if(obj.scheduleKey) return 'sk:' + obj.scheduleKey;
   if(obj.key) return 'key:' + obj.key; // movements
   if(obj.type || obj.title) return 'tt:' + (obj.type || '') + '|' + (obj.title || '');
+  if(obj.name && 'content' in obj) return 'pv:' + obj.name; // a prayer element's saved versions
   return null;
 }
-function mergeObjectArrayByIdentity(cloudArr, localArr){
-  const localBySig = new Map();
-  localArr.forEach(item => {
-    const sig = objectMergeSignature(item);
-    if(sig === null) return; // no reliable identity — handled in the union pass below
-    if(!localBySig.has(sig)) localBySig.set(sig, []);
-    localBySig.get(sig).push(item);
-  });
+function mergeObjectArrayByIdentity(cloudArr, localArr, baseArr){
+  const bucketBySig = arr => {
+    const map = new Map();
+    arr.forEach(item => {
+      const sig = objectMergeSignature(item);
+      if(sig === null) return; // no reliable identity — handled in the union pass below
+      if(!map.has(sig)) map.set(sig, []);
+      map.get(sig).push(item);
+    });
+    return map;
+  };
+  const localBySig = bucketBySig(localArr);
+  const cloudBySig = bucketBySig(cloudArr);
+  const baseBySig = Array.isArray(baseArr) ? bucketBySig(baseArr) : null;
+  // How many items sharing this identity should survive. With no base,
+  // keep them all (old behavior). With a base, items one side removed
+  // since the base are subtracted — but never below what both sides
+  // still have, and never above what either side has.
+  const keepCount = sig => {
+    const c = (cloudBySig.get(sig) || []).length;
+    const l = (localBySig.get(sig) || []).length;
+    if(!baseBySig) return Math.max(c, l);
+    const b = (baseBySig.get(sig) || []).length;
+    return Math.min(Math.max(c, l), Math.max(Math.min(c, l), c + l - b));
+  };
   const consumed = new Map();
   const result = [];
   cloudArr.forEach(cItem => {
     const sig = objectMergeSignature(cItem);
-    const bucket = sig !== null ? localBySig.get(sig) : null;
-    const idx = bucket ? (consumed.get(sig) || 0) : -1;
+    if(sig === null){ result.push(cItem); return; }
+    const bucket = localBySig.get(sig);
+    const idx = consumed.get(sig) || 0;
+    if(idx >= keepCount(sig)) return; // deleted on one side since the base
+    const baseBucket = baseBySig ? baseBySig.get(sig) : null;
     if(bucket && idx < bucket.length){
-      result.push(mergeFavoringContent(cItem, bucket[idx]));
-      consumed.set(sig, idx + 1);
+      result.push(mergeFavoringContent(cItem, bucket[idx], baseBucket ? baseBucket[idx] : undefined));
     } else {
       // No local counterpart (this device hasn't seen it, or it's a
       // teammate's addition) — keep it rather than drop it.
       result.push(cItem);
     }
+    consumed.set(sig, idx + 1);
   });
   // Anything on the local side left unmatched — new local elements the
   // cloud copy doesn't know about yet, plus anything with no identity
@@ -6525,25 +6553,25 @@ function mergeObjectArrayByIdentity(cloudArr, localArr){
     if(sig === null){ result.push(item); return; }
     const bucket = localBySig.get(sig);
     const idx = consumed.get(sig) || 0;
-    if(idx < bucket.length){ result.push(bucket[idx]); consumed.set(sig, idx + 1); }
+    if(idx < bucket.length && idx < keepCount(sig)){ result.push(bucket[idx]); consumed.set(sig, idx + 1); }
   });
   return result;
 }
-function mergeFavoringContent(cloudVal, localVal){
+function mergeFavoringContent(cloudVal, localVal, baseVal){
   if(localVal === undefined || localVal === null) return cloudVal;
   if(cloudVal === undefined || cloudVal === null) return localVal;
   const isPlainObj = v => v && typeof v === 'object' && !Array.isArray(v);
   if(isPlainObj(cloudVal) && isPlainObj(localVal)){
     const merged = {};
     new Set([...Object.keys(cloudVal), ...Object.keys(localVal)]).forEach(k => {
-      merged[k] = mergeFavoringContent(cloudVal[k], localVal[k]);
+      merged[k] = mergeFavoringContent(cloudVal[k], localVal[k], isPlainObj(baseVal) ? baseVal[k] : undefined);
     });
     return merged;
   }
   if(Array.isArray(cloudVal) && Array.isArray(localVal)){
     if(cloudVal.every(isPlainObj) && localVal.every(isPlainObj) &&
        (cloudVal.some(v => objectMergeSignature(v) !== null) || localVal.some(v => objectMergeSignature(v) !== null))){
-      return mergeObjectArrayByIdentity(cloudVal, localVal);
+      return mergeObjectArrayByIdentity(cloudVal, localVal, Array.isArray(baseVal) ? baseVal : undefined);
     }
     if(cloudVal.length === localVal.length){
       return cloudVal.map((cv, i) => mergeFavoringContent(cv, localVal[i]));
@@ -6557,13 +6585,28 @@ function mergeFavoringContent(cloudVal, localVal){
   if(localVal === '' && cloudVal !== '') return cloudVal;
   return localVal;
 }
-async function pushLiturgyToSupabase(dateStr, snapshot){
+// Per date: a copy of the cloud version the open Builder has fully taken
+// in — set when a service is opened from the cloud and after each
+// successful reconcile. It's what lets a merge tell "deleted here" apart
+// from "added elsewhere". Deep-copied so later edits to `state` can't
+// change it. No entry = no deletion tracking for that date (old behavior).
+const liturgyCloudBase = {};
+function setLiturgyCloudBase(dateStr, data){
+  if(!dateStr) return;
+  if(data && data.movements){
+    try{ liturgyCloudBase[dateStr] = JSON.parse(JSON.stringify(data)); return; }catch(e){}
+  }
+  delete liturgyCloudBase[dateStr];
+}
+// `base` is only passed for a snapshot of the live Builder `state` — other
+// callers push stored snapshots that the base doesn't describe.
+async function pushLiturgyToSupabase(dateStr, snapshot, base){
   if(!sbClient || !currentUser || !dateStr) return null;
   try{
     let merged = snapshot;
     try{
       const { data: existing } = await sbClient.from('liturgies').select('data').eq('service_date', dateStr).maybeSingle();
-      if(existing && existing.data) merged = mergeFavoringContent(existing.data, snapshot);
+      if(existing && existing.data) merged = mergeFavoringContent(existing.data, snapshot, base);
     }catch(e){ /* couldn't pre-fetch; fall back to pushing the snapshot as-is */ }
     await sbClient.from('liturgies').upsert({
       service_date: dateStr,
@@ -6602,6 +6645,66 @@ async function fetchAllServiceSnapshotsFromSupabase(){
 }
 
 /* ---------------------------------------------------------------------
+   Deletions for named shared lists — templates, the minister roster, and
+   ministers' colors and login emails. The merge above always keeps a
+   name the cloud has and this browser doesn't, so a deleted/removed/
+   unlinked entry came right back. This remembers which names this
+   browser has confirmed are in the cloud (per signed-in account): a
+   name on that list that's missing locally was deleted here, and one
+   missing from the cloud was deleted on another device. (Prayer
+   versions use their own approach — see mergePrayerLibraries.)
+--------------------------------------------------------------------- */
+const DELETION_TRACKED_SHARED_KEYS = ['liturgyTemplates', 'ministerRoster', 'ministerColors', 'ministerEmails'];
+function sharedItemNames(value){
+  if(Array.isArray(value)) return value.filter(v => typeof v === 'string');
+  return value && typeof value === 'object' ? Object.keys(value) : [];
+}
+function loadSyncedNames(key){
+  try{
+    const saved = JSON.parse(localStorage.getItem('syncedNames_' + key) || 'null');
+    if(saved && currentUser && saved.userId === currentUser.id && Array.isArray(saved.names)) return new Set(saved.names);
+  }catch(e){}
+  return null;
+}
+function saveSyncedNames(key, names){
+  if(!currentUser) return;
+  try{ localStorage.setItem('syncedNames_' + key, JSON.stringify({ userId: currentUser.id, names })); }catch(e){}
+}
+// `pulling` = true when folding the cloud copy into this browser (honors
+// deletions made on either side); false when pushing (honors only this
+// browser's own deletions, so a name re-saved here is never thrown away).
+function mergeTrackedSharedData(key, cloudVal, localVal, pulling){
+  let merged;
+  if(Array.isArray(cloudVal) && Array.isArray(localVal)){
+    // Plain name lists: combine both instead of keeping whichever is longer.
+    merged = [...localVal, ...cloudVal.filter(n => !localVal.includes(n))];
+  } else {
+    merged = mergeFavoringContent(cloudVal, localVal);
+    if(merged === localVal || merged === cloudVal) return merged; // one side missing — nothing to reconcile
+  }
+  const synced = loadSyncedNames(key);
+  if(!synced) return merged;
+  const localNames = new Set(sharedItemNames(localVal));
+  const cloudNames = new Set(sharedItemNames(cloudVal));
+  const deleted = name => synced.has(name) && (!localNames.has(name) || (pulling && !cloudNames.has(name)));
+  if(Array.isArray(merged)) return merged.filter(n => !deleted(n));
+  Object.keys(merged).forEach(name => { if(deleted(name)) delete merged[name]; });
+  return merged;
+}
+function pullTrackedSharedData(key, cloudVal, localVal){
+  const synced = loadSyncedNames(key);
+  const merged = mergeTrackedSharedData(key, cloudVal, localVal, true);
+  // Only names the cloud has count as confirmed — a local-only entry that
+  // hasn't been pushed yet must never look "deleted elsewhere". A name
+  // deleted here stays listed until a push removes it from the cloud.
+  const mergedNames = new Set(sharedItemNames(merged));
+  const localNames = new Set(sharedItemNames(localVal));
+  saveSyncedNames(key, sharedItemNames(cloudVal).filter(name =>
+    mergedNames.has(name) || (synced && synced.has(name) && !localNames.has(name))));
+  return merged;
+}
+
+/* ---------------------------------------------------------------------
    Phase 2 cloud sync — the Planner (Schedule) and the shared roster
    data (ministers, minister colors, sermon series, ESV API key). Same
    additive, fails-safe-to-local pattern as the liturgy archive: one
@@ -6611,15 +6714,22 @@ async function fetchAllServiceSnapshotsFromSupabase(){
 --------------------------------------------------------------------- */
 async function pushSharedDataToSupabase(key, data){
   if(!sbClient || !currentUser) return null;
+  const tracked = DELETION_TRACKED_SHARED_KEYS.includes(key);
+  const pushedNames = tracked ? sharedItemNames(data) : null;
   try{
     let merged = data;
     try{
       const { data: existing } = await sbClient.from('shared_data').select('data').eq('key', key).maybeSingle();
-      if(existing && existing.data !== undefined) merged = mergeFavoringContent(existing.data, data);
+      if(existing && existing.data !== undefined && existing.data !== null){
+        if(tracked) merged = mergeTrackedSharedData(key, existing.data, data, false);
+        else if(key === 'prayerLibrary') merged = mergePrayerLibraries(existing.data, data);
+        else merged = mergeFavoringContent(existing.data, data);
+      }
     }catch(e){ /* couldn't pre-fetch; fall back to pushing as-is */ }
-    await sbClient.from('shared_data').upsert({
+    const { error: upsertError } = await sbClient.from('shared_data').upsert({
       key, data: merged, updated_at: new Date().toISOString()
     }, { onConflict: 'key' });
+    if(tracked && !upsertError) saveSyncedNames(key, pushedNames);
     return merged;
   }catch(e){
     console.error('Could not sync "' + key + '" to the cloud; still saved locally.', e);
@@ -6680,20 +6790,20 @@ async function pullSharedDataOnSignIn(){
     if(document.getElementById('scheduleOverlay')?.classList.contains('open')) renderScheduleTable();
   }
   if(cloud.ministerRoster){
-    ministerRoster = mergeFavoringContent(cloud.ministerRoster, ministerRoster);
+    ministerRoster = pullTrackedSharedData('ministerRoster', cloud.ministerRoster, ministerRoster);
     try{ localStorage.setItem('ministerRoster', JSON.stringify(ministerRoster)); }catch(e){}
     renderMinisterChips();
   }
   if(cloud.ministerColors){
-    ministerColors = mergeFavoringContent(cloud.ministerColors, ministerColors);
+    ministerColors = pullTrackedSharedData('ministerColors', cloud.ministerColors, ministerColors);
     try{ localStorage.setItem('ministerColors', JSON.stringify(ministerColors)); }catch(e){}
   }
   if(cloud.ministerEmails){
-    ministerEmails = mergeFavoringContent(cloud.ministerEmails, ministerEmails);
+    ministerEmails = pullTrackedSharedData('ministerEmails', cloud.ministerEmails, ministerEmails);
     try{ localStorage.setItem('ministerEmails', JSON.stringify(ministerEmails)); }catch(e){}
   }
   if(cloud.prayerLibrary){
-    prayerLibrary = mergeFavoringContent(cloud.prayerLibrary, prayerLibrary);
+    prayerLibrary = mergePrayerLibraries(cloud.prayerLibrary, prayerLibrary);
     try{ localStorage.setItem('prayerLibrary', JSON.stringify(prayerLibrary)); }catch(e){}
   }
   updateSyncStatusIndicator();
@@ -6702,7 +6812,7 @@ async function pullSharedDataOnSignIn(){
     try{ localStorage.setItem('sermonSeriesRoster', JSON.stringify(sermonSeriesRoster)); }catch(e){}
   }
   if(cloud.liturgyTemplates){
-    liturgyTemplates = mergeFavoringContent(cloud.liturgyTemplates, liturgyTemplates);
+    liturgyTemplates = pullTrackedSharedData('liturgyTemplates', cloud.liturgyTemplates, liturgyTemplates);
     try{ localStorage.setItem('liturgyTemplates', JSON.stringify(liturgyTemplates)); }catch(e){}
     migrateStoredTemplates();
   }
@@ -7185,15 +7295,15 @@ async function syncRosterDataFromCloud(){
   if(!sbClient || !currentUser) return;
   const cloud = await fetchAllSharedDataFromSupabase();
   if(cloud.ministerRoster){
-    ministerRoster = mergeFavoringContent(cloud.ministerRoster, ministerRoster);
+    ministerRoster = pullTrackedSharedData('ministerRoster', cloud.ministerRoster, ministerRoster);
     try{ localStorage.setItem('ministerRoster', JSON.stringify(ministerRoster)); }catch(e){}
   }
   if(cloud.ministerColors){
-    ministerColors = mergeFavoringContent(cloud.ministerColors, ministerColors);
+    ministerColors = pullTrackedSharedData('ministerColors', cloud.ministerColors, ministerColors);
     try{ localStorage.setItem('ministerColors', JSON.stringify(ministerColors)); }catch(e){}
   }
   if(cloud.ministerEmails){
-    ministerEmails = mergeFavoringContent(cloud.ministerEmails, ministerEmails);
+    ministerEmails = pullTrackedSharedData('ministerEmails', cloud.ministerEmails, ministerEmails);
     try{ localStorage.setItem('ministerEmails', JSON.stringify(ministerEmails)); }catch(e){}
   }
   if(cloud.sermonSeriesRoster){
@@ -8064,6 +8174,44 @@ function savePrayerLibraryToStorage(){
 function prayerLibraryKey(title){
   return (title || '').trim().toLowerCase();
 }
+/* ---------------------------------------------------------------------
+   Deleted prayer versions. Copies of each version live on in every
+   service and template that used that prayer (el.savedVersions), and
+   mergePrayerLibraryIntoElement would push any of them straight back
+   into the library. So a deletion is recorded in the library itself —
+   under a key prayerLibraryKey() can never produce, since it lowercases
+   — as "title\nname" → deletion time. A copy saved before that time is
+   treated as deleted everywhere; saving that name again (which stamps a
+   newer savedAt) brings it back.
+--------------------------------------------------------------------- */
+const PRAYER_DELETED_KEY = 'DELETED_VERSIONS';
+function isPrayerVersionDeleted(deleted, libKey, version){
+  const deletedAt = deleted && deleted[libKey + '\n' + version.name];
+  return !!deletedAt && (version.savedAt || 0) < deletedAt;
+}
+function mergePrayerLibraries(cloudLib, localLib){
+  cloudLib = cloudLib || {};
+  localLib = localLib || {};
+  const deleted = { ...(cloudLib[PRAYER_DELETED_KEY] || {}) };
+  Object.entries(localLib[PRAYER_DELETED_KEY] || {}).forEach(([k, t]) => { if(!(deleted[k] >= t)) deleted[k] = t; });
+  const merged = {};
+  new Set([...Object.keys(cloudLib), ...Object.keys(localLib)]).forEach(libKey => {
+    if(libKey === PRAYER_DELETED_KEY) return;
+    const cloudVersions = Array.isArray(cloudLib[libKey]) ? cloudLib[libKey] : [];
+    const localVersions = Array.isArray(localLib[libKey]) ? localLib[libKey] : [];
+    // Matched by name, so two different versions are never folded into one.
+    const versions = cloudVersions.map(cv => {
+      const lv = localVersions.find(v => v.name === cv.name);
+      if(!lv) return cv;
+      return (cv.savedAt || 0) > (lv.savedAt || 0) ? cv : mergeFavoringContent(cv, lv);
+    });
+    localVersions.forEach(lv => { if(!cloudVersions.some(cv => cv.name === lv.name)) versions.push(lv); });
+    const live = versions.filter(v => !isPrayerVersionDeleted(deleted, libKey, v));
+    if(live.length) merged[libKey] = live;
+  });
+  if(Object.keys(deleted).length) merged[PRAYER_DELETED_KEY] = deleted;
+  return merged;
+}
 // Pulls in any library versions this element is missing (by name) and
 // pushes any versions this element has that the library doesn't (e.g.
 // the "Standard" version baked into a built-in template) — called on
@@ -8073,6 +8221,10 @@ function mergePrayerLibraryIntoElement(el){
   const key = prayerLibraryKey(el.title);
   if(!key) return;
   if(!el.savedVersions) el.savedVersions = [];
+  const deleted = prayerLibrary[PRAYER_DELETED_KEY];
+  if(el.savedVersions.some(v => isPrayerVersionDeleted(deleted, key, v))){
+    el.savedVersions = el.savedVersions.filter(v => !isPrayerVersionDeleted(deleted, key, v));
+  }
   const libVersions = prayerLibrary[key] || [];
   let libChanged = false;
   libVersions.forEach(lv => {
@@ -8080,7 +8232,7 @@ function mergePrayerLibraryIntoElement(el){
   });
   el.savedVersions.forEach(v => {
     if(!libVersions.some(lv => lv.name === v.name)){
-      libVersions.push({ id: v.id, name: v.name, content: v.content });
+      libVersions.push({ id: v.id, name: v.name, content: v.content, savedAt: v.savedAt });
       libChanged = true;
     }
   });
@@ -8161,13 +8313,14 @@ async function savePrayerFromPicker(){
     const ok = await customConfirm(`"${name}" is already saved for this prayer. Overwrite it with the current text? This updates it everywhere this prayer is used.`);
     if(!ok) return;
     existing.content = el.content;
+    existing.savedAt = Date.now();
   } else {
-    el.savedVersions.push({ id:'pv' + Date.now() + Math.random().toString(36).slice(2,6), name, content: el.content });
+    el.savedVersions.push({ id:'pv' + Date.now() + Math.random().toString(36).slice(2,6), name, content: el.content, savedAt: Date.now() });
   }
   const saved = el.savedVersions.find(v => v.name === name);
   const libEntry = prayerLibrary[key].find(v => v.name === name);
-  if(libEntry) libEntry.content = saved.content;
-  else prayerLibrary[key].push({ id: saved.id, name: saved.name, content: saved.content });
+  if(libEntry){ libEntry.content = saved.content; libEntry.savedAt = saved.savedAt; }
+  else prayerLibrary[key].push({ id: saved.id, name: saved.name, content: saved.content, savedAt: saved.savedAt });
   savePrayerLibraryToStorage();
   render();
   const freshTrigger = document.querySelector(`.element-card[data-id="${prayerPickerElId}"] .prayer-picker-trigger`);
@@ -8185,8 +8338,10 @@ async function deleteSavedPrayer(versionId){
   if(prayerLibrary[key]){
     prayerLibrary[key] = prayerLibrary[key].filter(x => x.name !== v.name);
     if(!prayerLibrary[key].length) delete prayerLibrary[key];
-    savePrayerLibraryToStorage();
   }
+  if(!prayerLibrary[PRAYER_DELETED_KEY]) prayerLibrary[PRAYER_DELETED_KEY] = {};
+  prayerLibrary[PRAYER_DELETED_KEY][key + '\n' + v.name] = Date.now();
+  savePrayerLibraryToStorage();
   render();
   const freshTrigger = document.querySelector(`.element-card[data-id="${prayerPickerElId}"] .prayer-picker-trigger`);
   if(freshTrigger) openPrayerPicker(freshTrigger, prayerPickerElId);
@@ -9647,6 +9802,7 @@ async function deleteServiceFromPanel(dateStr){
   const archive = loadLiturgyArchive();
   delete archive[dateStr];
   try{ localStorage.setItem('liturgyArchive', JSON.stringify(archive)); }catch(e){}
+  setLiturgyCloudBase(dateStr, null);
   if(sbClient && currentUser){
     try{ await sbClient.from('liturgies').delete().eq('service_date', dateStr); }catch(e){ console.error('Could not delete the cloud copy of this service.', e); }
   }
@@ -10176,7 +10332,8 @@ function performAutosave(){
     archive[dateStr] = snapshot;
     localStorage.setItem('liturgyArchive', JSON.stringify(archive));
   }catch(e){}
-  pushLiturgyToSupabase(dateStr, snapshot).then(pushedMerged => reconcileLiturgyFromCloud(dateStr, pushedMerged));
+  const baseBeforePush = liturgyCloudBase[dateStr];
+  pushLiturgyToSupabase(dateStr, snapshot, baseBeforePush).then(pushedMerged => reconcileLiturgyFromCloud(dateStr, pushedMerged, baseBeforePush));
   lastSavedSnapshotJSON = buildCurrentSnapshotJSON();
 }
 /* ---------------------------------------------------------------------
@@ -10199,10 +10356,18 @@ function isActivelyEditingField(){
   if(!ae) return false;
   return ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT' || ae.isContentEditable;
 }
-function reconcileLiturgyFromCloud(dateStr, pushedMerged){
+function reconcileLiturgyFromCloud(dateStr, pushedMerged, baseBeforePush){
   if(!pushedMerged || !pushedMerged.movements) return;
   if(document.getElementById('serviceDate')?.value !== dateStr) return; // switched dates mid-round-trip
   if(isActivelyEditingField()) return; // don't disrupt typing — retry next tick
+  // The base only advances once this device has actually taken in the
+  // pushed result below — if it advanced on a skipped tick, a teammate's
+  // new element this device never received would look "deleted here".
+  const baseSide = baseBeforePush && {
+    churchTitle: baseBeforePush.churchTitle,
+    serviceTitle: baseBeforePush.serviceTitle,
+    movements: baseBeforePush.movements
+  };
   const localSide = {
     churchTitle: document.getElementById('churchTitle').innerText,
     serviceTitle: document.getElementById('serviceTitle').value,
@@ -10216,7 +10381,8 @@ function reconcileLiturgyFromCloud(dateStr, pushedMerged){
   // Argument order intentionally reversed from every other call in this
   // file — mergeFavoringContent's second argument wins a conflict, and
   // here that should be the cloud side, not local.
-  const reconciled = mergeFavoringContent(localSide, cloudSide);
+  const reconciled = mergeFavoringContent(localSide, cloudSide, baseSide);
+  setLiturgyCloudBase(dateStr, pushedMerged);
   const withoutIds = arr => JSON.stringify(arr, (k, v) => k === 'id' ? undefined : v);
   if(withoutIds(reconciled.movements) === withoutIds(state)) return; // nothing actually changed
   state = reconciled.movements.map(m => ({
