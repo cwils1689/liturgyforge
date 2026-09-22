@@ -1724,6 +1724,10 @@
     <button onclick="snoozeBackupNudge()">Remind me later</button>
   </div>
 
+  <div id="offlineBanner" class="backup-nudge">
+    <span>You're offline — changes are only on this device and won't be saved to the cloud until you reconnect. Keep the app open until this message goes away.</span>
+  </div>
+
   <div id="liveModeOverlay" class="live-mode-overlay">
     <div class="live-mode-topbar">
       <button onclick="cycleLiveModeSize(-1)" title="Smaller text">A−</button>
@@ -6319,8 +6323,15 @@ async function onDateChange(){
   }
 
   let snap = null;
+  // Signed in but offline: whatever gets shown below (this browser's copy
+  // or a fresh template) becomes the base, so once the cloud is reachable
+  // again only what's actually edited here is pushed — untouched parts
+  // defer to the cloud instead of overwriting it with an older copy.
+  let cloudUnreachable = false;
   if(currentUser){
     snap = await fetchLiturgyFromSupabase(dateStr);
+    cloudUnreachable = snap === undefined;
+    if(cloudUnreachable){ cloudSyncFailing = true; updateOfflineBanner(); }
     setLiturgyCloudBase(dateStr, snap);
     if(snap){
       try{
@@ -6343,6 +6354,7 @@ async function onDateChange(){
       elements: m.elements.map(el => ({ ...migrateElement(el), id: newId() }))
     }));
     currentLoadedDate = dateStr;
+    if(cloudUnreachable) setLiturgyCloudBase(dateStr, snap);
     document.getElementById('mainColorDot').innerHTML = scheduleColorDotHtml(dateStr);
     render();
     refreshServicesPanelIfOpen();
@@ -6354,12 +6366,16 @@ async function onDateChange(){
   currentLoadedDate = dateStr;
 
   const info = getLiturgicalInfo(dateStr);
-  if(!info){ render(); refreshServicesPanelIfOpen(); updateCurrentDateDisplay(); return; }
+  if(!info){
+    if(cloudUnreachable) setLiturgyCloudBase(dateStr, JSON.parse(buildCurrentSnapshotJSON()));
+    render(); refreshServicesPanelIfOpen(); updateCurrentDateDisplay(); return;
+  }
   document.getElementById('serviceTitle').value = `${info.label} (Year ${info.rclYear})`;
   document.getElementById('mainColorDot').innerHTML = scheduleColorDotHtml(dateStr);
   render();
   syncLectionary(dateStr);
   applyScheduleForDate(dateStr);
+  if(cloudUnreachable) setLiturgyCloudBase(dateStr, JSON.parse(buildCurrentSnapshotJSON()));
   render();
   refreshServicesPanelIfOpen();
   updateCurrentDateDisplay();
@@ -6379,6 +6395,16 @@ try{
 }catch(e){ console.error('Supabase client failed to initialize; app will run local-only.', e); }
 
 let currentUser = null;
+// Offline warning for signed-in users. Stays up until a save actually
+// reaches the cloud, not just until the network comes back.
+let cloudSyncFailing = false;
+function updateOfflineBanner(){
+  const banner = document.getElementById('offlineBanner');
+  const serviceOpen = !!document.getElementById('serviceDate')?.value; // a failed save only matters while a service is open
+  if(banner) banner.classList.toggle('on', !!currentUser && (!navigator.onLine || (cloudSyncFailing && serviceOpen)));
+}
+window.addEventListener('offline', updateOfflineBanner);
+window.addEventListener('online', function(){ updateOfflineBanner(); performAutosave(); });
 
 function showAuthOverlay(){ document.getElementById('authOverlay').classList.add('open'); }
 function hideAuthOverlay(){ document.getElementById('authOverlay').classList.remove('open'); }
@@ -6445,6 +6471,7 @@ function updateSyncStatusIndicator(){
     btn.title = 'Login to sync';
     btn.classList.remove('signed-in');
   }
+  updateOfflineBanner();
 }
 async function restoreSupabaseSession(){
   if(!sbClient) return;
@@ -6582,6 +6609,9 @@ function mergeFavoringContent(cloudVal, localVal, baseVal){
     const richness = v => { try{ return JSON.stringify(v).length; }catch(e){ return 0; } };
     return richness(localVal) >= richness(cloudVal) ? localVal : cloudVal;
   }
+  // With a base: a value this side hasn't changed since the base isn't an
+  // edit, just an old copy — so the other side's (newer) value wins.
+  if(baseVal !== undefined && baseVal !== null && localVal === baseVal && cloudVal !== '') return cloudVal;
   if(localVal === '' && cloudVal !== '') return cloudVal;
   return localVal;
 }
@@ -6604,30 +6634,40 @@ async function pushLiturgyToSupabase(dateStr, snapshot, base){
   if(!sbClient || !currentUser || !dateStr) return null;
   try{
     let merged = snapshot;
-    try{
-      const { data: existing } = await sbClient.from('liturgies').select('data').eq('service_date', dateStr).maybeSingle();
-      if(existing && existing.data) merged = mergeFavoringContent(existing.data, snapshot, base);
-    }catch(e){ /* couldn't pre-fetch; fall back to pushing the snapshot as-is */ }
-    await sbClient.from('liturgies').upsert({
+    // If the cloud copy can't be read, don't push at all — pushing this
+    // device's copy unmerged could overwrite newer edits from elsewhere.
+    const { data: existing, error: readError } = await sbClient.from('liturgies').select('data').eq('service_date', dateStr).maybeSingle();
+    if(readError) throw readError;
+    if(existing && existing.data) merged = mergeFavoringContent(existing.data, snapshot, base);
+    const { error: writeError } = await sbClient.from('liturgies').upsert({
       service_date: dateStr,
       data: merged,
       updated_at: new Date().toISOString()
     }, { onConflict: 'service_date' });
+    if(writeError) throw writeError;
+    cloudSyncFailing = false;
+    updateOfflineBanner();
     return merged;
   }catch(e){
     console.error('Could not sync this service to the cloud; it is still saved locally.', e);
+    cloudSyncFailing = true;
+    updateOfflineBanner();
     return null;
   }
 }
+// Returns null when the cloud has no service for that date, and undefined
+// when the cloud couldn't be reached (offline, error) — onDateChange treats
+// those differently.
 async function fetchLiturgyFromSupabase(dateStr){
   if(!sbClient || !currentUser || !dateStr) return null;
   try{
     const { data, error } = await sbClient.from('liturgies').select('data').eq('service_date', dateStr).maybeSingle();
-    if(error || !data) return null;
+    if(error) return undefined;
+    if(!data) return null;
     return data.data;
   }catch(e){
     console.error('Could not fetch this service from the cloud; using the local copy instead.', e);
-    return null;
+    return undefined;
   }
 }
 async function fetchAllServiceSnapshotsFromSupabase(){
@@ -6750,6 +6790,13 @@ async function fetchAllSharedDataFromSupabase(){
   }
 }
 async function pullSharedDataOnSignIn(){
+  // A service opened before signing in came from this browser, not the
+  // cloud — reopen it from the cloud so the next autosave can't push the
+  // local copy over the shared one.
+  if(currentLoadedDate && !liturgyCloudBase[currentLoadedDate]){
+    currentLoadedDate = '';
+    await onDateChange();
+  }
   const cloud = await fetchAllSharedDataFromSupabase();
   if(!Object.keys(cloud).length) return;
   if(cloud.schedule){
@@ -7623,16 +7670,13 @@ async function renameMinisterEverywhere(oldName){
     if(renameMinisterInSnapshot(archive[dateStr], oldName, trimmed)) touchedDates.add(dateStr);
   }
 
-  // 3. Every liturgy archived in the cloud, if signed in — same
-  //    more-recent-copy-wins merge as renameSeriesEverywhere, so this
-  //    doesn't clobber an edit made on another device since it last synced.
+  // 3. Every liturgy archived in the cloud, if signed in — renamed in the
+  //    cloud copy itself (the source of truth), never this browser's
+  //    possibly-older copy, so this can't clobber another device's edits.
   if(sbClient && currentUser){
     const cloudSnapshots = await fetchAllServiceSnapshotsFromSupabase();
     for(const dateStr in cloudSnapshots){
-      const cloudSnap = cloudSnapshots[dateStr];
-      const localSnap = archive[dateStr];
-      const useCloud = !localSnap || (cloudSnap.savedAt || 0) > (localSnap.savedAt || 0);
-      const target = useCloud ? cloudSnap : localSnap;
+      const target = cloudSnapshots[dateStr];
       if(renameMinisterInSnapshot(target, oldName, trimmed)){
         archive[dateStr] = target;
         await pushLiturgyToSupabase(dateStr, target);
@@ -8120,16 +8164,13 @@ async function renameSeriesEverywhere(oldName){
     if(renameSeriesInSnapshot(archive[dateStr], oldName, trimmed)) touchedDates.add(dateStr);
   }
 
-  // 4. Every liturgy archived in the cloud, if signed in — merging by
-  //    whichever copy (local vs cloud) is more recent per date, so this
-  //    doesn't clobber an edit made on another device since it last synced.
+  // 4. Every liturgy archived in the cloud, if signed in — renamed in the
+  //    cloud copy itself (the source of truth), never this browser's
+  //    possibly-older copy, so this can't clobber another device's edits.
   if(sbClient && currentUser){
     const cloudSnapshots = await fetchAllServiceSnapshotsFromSupabase();
     for(const dateStr in cloudSnapshots){
-      const cloudSnap = cloudSnapshots[dateStr];
-      const localSnap = archive[dateStr];
-      const useCloud = !localSnap || (cloudSnap.savedAt || 0) > (localSnap.savedAt || 0);
-      const target = useCloud ? cloudSnap : localSnap;
+      const target = cloudSnapshots[dateStr];
       if(renameSeriesInSnapshot(target, oldName, trimmed)){
         archive[dateStr] = target;
         await pushLiturgyToSupabase(dateStr, target);
@@ -10295,6 +10336,7 @@ function hasUnsavedChanges(){
   return current !== lastSavedSnapshotJSON;
 }
 function performAutosave(){
+  updateOfflineBanner(); // re-checked every tick so it can never get stuck on or off
   const dateStr = document.getElementById('serviceDate')?.value;
   if(!dateStr) return;
   const assignedMinisters = computeAssignedMinisters(state);
@@ -10395,6 +10437,16 @@ function reconcileLiturgyFromCloud(dateStr, pushedMerged, baseBeforePush){
   lastSavedSnapshotJSON = buildCurrentSnapshotJSON();
 }
 setInterval(performAutosave, 8000);
+// Also save ~1.5s after an edit settles, so a quick edit followed by
+// closing the app doesn't have to wait for the next 8s tick.
+let quickAutosaveTimer = null;
+function scheduleQuickAutosave(){
+  clearTimeout(quickAutosaveTimer);
+  quickAutosaveTimer = setTimeout(() => { if(hasUnsavedChanges()) performAutosave(); }, 1500);
+}
+// Typing, dropdowns, taps/clicks and drag-and-drop all end in one of these;
+// hasUnsavedChanges() keeps it from pushing when nothing actually changed.
+['input', 'change', 'pointerup', 'keyup'].forEach(evt => document.addEventListener(evt, scheduleQuickAutosave));
 setInterval(refreshNotifications, 60000);
 window.addEventListener('beforeunload', function(){
   performAutosave();
@@ -10430,6 +10482,13 @@ async function checkForAutosaveRestore(){
   try{ cleanExit = localStorage.getItem('lastSessionClean') === '1'; }catch(e){}
   try{ localStorage.removeItem('lastSessionClean'); }catch(e){} // this session is "dirty" again until it exits cleanly
   if(cleanExit) return;
+  // Signed in, the cloud is the source of truth — autosave already pushed
+  // this work, and restoring an older local copy could overwrite newer
+  // edits made on another device.
+  if(currentUser){
+    try{ localStorage.removeItem('currentAutosave'); }catch(e){}
+    return;
+  }
 
   let snap;
   try{
@@ -10535,7 +10594,6 @@ renderMinisterChips();
 document.getElementById('churchEyebrow').innerText = loadChurchName();
 loadStateFromTemplate(getEffectiveDefaultTemplate());
 render();
-checkForAutosaveRestore();
 (function initBibleTranslationSelect(){
   const sel = document.getElementById('bibleTranslationSelect');
   if(sel) sel.value = loadBibleTranslation();
@@ -10557,7 +10615,9 @@ checkForAutosaveRestore();
   }
 })();
 
-restoreSupabaseSession().then(checkBackupNudge);
+// The restore check waits for the session so it knows whether this
+// browser is signed in (see checkForAutosaveRestore).
+restoreSupabaseSession().then(() => { checkBackupNudge(); checkForAutosaveRestore(); });
 
 if('serviceWorker' in navigator){
   window.addEventListener('load', function(){
