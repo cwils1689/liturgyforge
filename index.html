@@ -804,6 +804,10 @@
     border:1px solid var(--border); border-radius:4px; padding:3px 5px;
     color:var(--ink-soft); background:#fff; width:100%;
   }
+  /* Mouse users drag instead; the dropdown stays as the touch-device path. */
+  @media (hover:hover) and (pointer:fine){
+    .hymnal-add-select{ display:none; }
+  }
   .hymnal-panel-hint{
     padding:10px 16px; font-size:10.5px; color:var(--ink-faint); border-top:1px solid var(--border);
     line-height:1.4; flex-shrink:0;
