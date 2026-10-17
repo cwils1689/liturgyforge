@@ -6616,9 +6616,19 @@ function mergeFavoringContent(cloudVal, localVal, baseVal){
   }
   // With a base: a value this side hasn't changed since the base isn't an
   // edit, just an old copy — so the other side's (newer) value wins.
-  if(baseVal !== undefined && baseVal !== null && localVal === baseVal && cloudVal !== '') return cloudVal;
-  if(localVal === '' && cloudVal !== '') return cloudVal;
+  if(baseVal !== undefined && baseVal !== null && localVal === baseVal && !isBlankContent(cloudVal)) return cloudVal;
+  // ...and if only this side changed it, that's a real edit — including
+  // deliberately clearing the box.
+  if(baseVal !== undefined && baseVal !== null && cloudVal === baseVal) return localVal;
+  if(isBlankContent(localVal) && !isBlankContent(cloudVal)) return cloudVal;
   return localVal;
+}
+// A rich-text box that looks empty is often saved as "<br>" (Safari on
+// iPhone especially) rather than "" — treat those as blank so one can't
+// overwrite real text in a merge.
+function isBlankContent(v){
+  if(typeof v !== 'string') return false;
+  return v.replace(/<br\s*\/?>/gi, '').replace(/&nbsp;/gi, '').replace(/<\/?(p|div|span)\b[^>]*>/gi, '').trim() === '';
 }
 // Per date: a copy of the cloud version the open Builder has fully taken
 // in — set when a service is opened from the cloud and after each
@@ -7491,15 +7501,32 @@ async function markNotificationRead(dateStr){
   if(!myMinisterName) return;
   const entry = notifSourceArchive[dateStr];
   if(!entry) return;
-  const notified = new Set(Array.isArray(entry.notifiedMinisters) ? entry.notifiedMinisters : []);
-  notified.add(myMinisterName);
-  entry.notifiedMinisters = [...notified];
+  // Only the read list changes. Saving the whole `entry` here pushed a
+  // possibly minutes-old copy of the service and could wipe newer edits.
+  const addMe = snap => {
+    const notified = new Set(Array.isArray(snap.notifiedMinisters) ? snap.notifiedMinisters : []);
+    notified.add(myMinisterName);
+    snap.notifiedMinisters = [...notified];
+  };
+  addMe(entry);
   try{
     const archive = loadLiturgyArchive();
-    archive[dateStr] = entry;
-    localStorage.setItem('liturgyArchive', JSON.stringify(archive));
+    if(archive[dateStr]){
+      addMe(archive[dateStr]);
+      localStorage.setItem('liturgyArchive', JSON.stringify(archive));
+    }
   }catch(e){}
-  await pushLiturgyToSupabase(dateStr, entry);
+  if(sbClient && currentUser){
+    try{
+      const { data: row, error: readError } = await sbClient.from('liturgies').select('data').eq('service_date', dateStr).maybeSingle();
+      if(readError) throw readError;
+      if(row && row.data){
+        addMe(row.data);
+        const { error: writeError } = await sbClient.from('liturgies').update({ data: row.data, updated_at: new Date().toISOString() }).eq('service_date', dateStr);
+        if(writeError) throw writeError;
+      }
+    }catch(e){ console.error('Could not mark this assignment read in the cloud.', e); }
+  }
   myPendingNotifications = myPendingNotifications.filter(n => n.date !== dateStr);
   updateNotificationBadge();
 }
