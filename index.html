@@ -230,6 +230,8 @@
     border-radius:5px; padding:6px 10px; cursor:pointer;
   }
   .current-date-display:hover{ border-color:var(--gold); color:var(--gold); }
+  .editing-presence{ display:none; font-family:'Inter',sans-serif; font-size:11px; font-weight:600; color:var(--ink-soft); }
+  .editing-presence.on{ display:inline-block; }
   .panel-settings{
     display:flex; gap:8px; padding-bottom:12px; margin-bottom:12px; border-bottom:1px solid var(--border);
   }
@@ -1500,6 +1502,7 @@
     .column-picker{ display:none !important; }
     .resync-btn{ display:none !important; }
     .current-date-display{ display:none !important; }
+    .editing-presence{ display:none !important; }
     .backup-nudge{ display:none !important; }
     .hymn-playback-bar{ display:none !important; }
     .hymn-play-btn{ display:none !important; }
@@ -1538,6 +1541,7 @@
       <input type="date" id="serviceDate" style="display:none">
       <button id="currentDateDisplay" class="current-date-display" onclick="toggleServicesPanel()" title="Click to choose or create a service date">📃 Select a Service</button>
       <span id="mainColorDot"></span>
+      <span id="editingPresence" class="editing-presence"></span>
       <button class="resync-btn" onclick="resyncCurrentDate()" title="Re-pull the RCL, BCP, and Schedule data for this date — refreshes those specific fields (even if you've edited them) but leaves everything else in the liturgy untouched">🔄 Refresh Data</button>
     </div>
     <div id="syncStatus" class="sync-status"></div>
@@ -6167,6 +6171,8 @@ document.getElementById('loadInput').addEventListener('change', function(e){
       document.getElementById('churchTitle').innerText = data.churchTitle || "The Lord's Service";
       document.getElementById('serviceTitle').value = data.serviceTitle || '';
       document.getElementById('serviceDate').value = data.serviceDate || '';
+      currentLoadedDate = data.serviceDate || '';
+      builderIsPristine = false;
       (data.ministerRoster || []).forEach(name => {
         if(!ministerRoster.includes(name)) ministerRoster.push(name);
       });
@@ -6300,7 +6306,7 @@ function saveCurrentLiturgyToArchive(dateStr){
     churchTitle: document.getElementById('churchTitle').innerText,
     serviceTitle: document.getElementById('serviceTitle').value,
     serviceDate: dateStr,
-    movements: state,
+    movements: JSON.parse(JSON.stringify(state)),
     savedAt: Date.now()
   };
   try{
@@ -6309,7 +6315,11 @@ function saveCurrentLiturgyToArchive(dateStr){
     localStorage.setItem('liturgyArchive', JSON.stringify(archive));
     localStorage.setItem('currentAutosave', JSON.stringify(snapshot));
   }catch(e){}
-  pushLiturgyToSupabase(dateStr, snapshot, liturgyCloudBase[dateStr]);
+  // The cloud already has it? (Same shape as buildCurrentSnapshotJSON, but
+  // the date box may already show the date being switched to.)
+  const unchangedJSON = JSON.stringify({ churchTitle: snapshot.churchTitle, serviceTitle: snapshot.serviceTitle, serviceDate: dateStr, movements: state });
+  if(unchangedJSON === lastPushedSnapshotJSON) return;
+  pushLiturgyToSupabase(dateStr, snapshot, liturgyCloudBase[dateStr], { live: true });
 }
 async function onDateChange(){
   const dateStr = document.getElementById('serviceDate').value;
@@ -6328,6 +6338,7 @@ async function onDateChange(){
   }
 
   let snap = null;
+  let snapFromCloud = false;
   // Signed in but offline: whatever gets shown below (this browser's copy
   // or a fresh template) becomes the base, so once the cloud is reachable
   // again only what's actually edited here is pushed — untouched parts
@@ -6338,6 +6349,7 @@ async function onDateChange(){
     cloudUnreachable = snap === undefined;
     if(cloudUnreachable){ cloudSyncFailing = true; updateOfflineBanner(); }
     setLiturgyCloudBase(dateStr, snap);
+    snapFromCloud = !!(snap && snap.movements);
     if(snap){
       try{
         const archive = loadLiturgyArchive();
@@ -6362,6 +6374,8 @@ async function onDateChange(){
     if(cloudUnreachable) setLiturgyCloudBase(dateStr, snap);
     document.getElementById('mainColorDot').innerHTML = scheduleColorDotHtml(dateStr);
     render();
+    // Straight from the cloud — nothing to save back until it's edited.
+    if(snapFromCloud) lastPushedSnapshotJSON = buildCurrentSnapshotJSON();
     refreshServicesPanelIfOpen();
     updateCurrentDateDisplay();
     return;
@@ -6534,20 +6548,60 @@ function objectMergeSignature(obj){
   if(obj.name && 'content' in obj) return 'pv:' + obj.name; // a prayer element's saved versions
   return null;
 }
+// Gives each element a permanent id (`uid`) that's saved with it, so a
+// merge can line elements up exactly even when several share a title
+// ("Hymn", "Scripture Reading") or get reordered. The first time, it's
+// derived from the element's place in the service, so two devices
+// opening the same older service give its elements the same ids.
+function ensureElementUids(movements){
+  if(!Array.isArray(movements)) return;
+  const used = new Set();
+  movements.forEach(m => (m.elements || []).forEach(el => {
+    if(!el.uid) return;
+    if(used.has(el.uid)) delete el.uid; // a copied element — gets its own below
+    else used.add(el.uid);
+  }));
+  movements.forEach(m => {
+    const seen = {};
+    (m.elements || []).forEach(el => {
+      const sig = objectMergeSignature(el) || 'el';
+      const n = seen[sig] = (seen[sig] || 0) + 1;
+      if(el.uid) return;
+      let uid = (m.key || 'm') + '|' + sig + '|' + n;
+      for(let k = 2; used.has(uid); k++) uid = (m.key || 'm') + '|' + sig + '|' + n + '#' + k;
+      el.uid = uid;
+      used.add(uid);
+    });
+  });
+}
 function mergeObjectArrayByIdentity(cloudArr, localArr, baseArr){
-  const bucketBySig = arr => {
+  // Items with a `uid` pair by it. An item whose uid isn't on another side
+  // is new there — unless that side has an item with no uid yet (saved by
+  // a browser still running older code) that matches the old way, in
+  // which case they pair the old way (by schedule link / type + title).
+  const sides = [cloudArr, localArr, Array.isArray(baseArr) ? baseArr : []];
+  const uidSets = sides.map(arr => new Set(arr.filter(v => v && v.uid).map(v => v.uid)));
+  const uidlessSigs = sides.map(arr => new Set(arr.filter(v => v && !v.uid).map(objectMergeSignature).filter(sig => sig !== null)));
+  const sigOf = (item, side) => {
+    const sig = objectMergeSignature(item);
+    if(sig === null || !item.uid) return sig;
+    const pairedByUid = uidSets.some((set, i) => i !== side && set.has(item.uid));
+    const legacyPartner = uidlessSigs.some((set, i) => i !== side && set.has(sig));
+    return (pairedByUid || !legacyPartner) ? 'uid:' + item.uid : sig;
+  };
+  const bucketBySig = (arr, side) => {
     const map = new Map();
     arr.forEach(item => {
-      const sig = objectMergeSignature(item);
+      const sig = sigOf(item, side);
       if(sig === null) return; // no reliable identity — handled in the union pass below
       if(!map.has(sig)) map.set(sig, []);
       map.get(sig).push(item);
     });
     return map;
   };
-  const localBySig = bucketBySig(localArr);
-  const cloudBySig = bucketBySig(cloudArr);
-  const baseBySig = Array.isArray(baseArr) ? bucketBySig(baseArr) : null;
+  const localBySig = bucketBySig(localArr, 1);
+  const cloudBySig = bucketBySig(cloudArr, 0);
+  const baseBySig = Array.isArray(baseArr) ? bucketBySig(baseArr, 2) : null;
   // How many items sharing this identity should survive. With no base,
   // keep them all (old behavior). With a base, items one side removed
   // since the base are subtracted — but never below what both sides
@@ -6562,7 +6616,7 @@ function mergeObjectArrayByIdentity(cloudArr, localArr, baseArr){
   const consumed = new Map();
   const result = [];
   cloudArr.forEach(cItem => {
-    const sig = objectMergeSignature(cItem);
+    const sig = sigOf(cItem, 0);
     if(sig === null){ result.push(cItem); return; }
     const bucket = localBySig.get(sig);
     const idx = consumed.get(sig) || 0;
@@ -6581,7 +6635,7 @@ function mergeObjectArrayByIdentity(cloudArr, localArr, baseArr){
   // cloud copy doesn't know about yet, plus anything with no identity
   // signature at all (always kept, since it can't be safely paired).
   localArr.forEach(item => {
-    const sig = objectMergeSignature(item);
+    const sig = sigOf(item, 1);
     if(sig === null){ result.push(item); return; }
     const bucket = localBySig.get(sig);
     const idx = consumed.get(sig) || 0;
@@ -6643,26 +6697,71 @@ function setLiturgyCloudBase(dateStr, data){
   }
   delete liturgyCloudBase[dateStr];
 }
+/* ---------------------------------------------------------------------
+   Conditional cloud writes. A plain read → merge → upsert let two devices
+   overlap: B reads, A saves, B writes back what it read — silently undoing
+   A's edit. This only lands the write if the row's updated_at is still
+   what was read; if someone saved in between, it re-reads and merges
+   again. A failed read throws — it never falls back to writing this
+   device's copy unmerged. `mergeFn(cloudData)` gets undefined when the row
+   doesn't exist yet, and can return CLOUD_WRITE_SKIP to write nothing.
+--------------------------------------------------------------------- */
+const CLOUD_WRITE_SKIP = {};
+async function mergeAndWriteCloudRow(table, keyCol, keyVal, mergeFn){
+  for(let attempt = 0; attempt < 5; attempt++){
+    const { data: existing, error: readError } = await sbClient.from(table).select('data, updated_at').eq(keyCol, keyVal).maybeSingle();
+    if(readError) throw readError;
+    const merged = mergeFn(existing ? existing.data : undefined);
+    if(merged === CLOUD_WRITE_SKIP) return { skipped: true };
+    const updatedAt = new Date().toISOString();
+    if(existing){
+      let query = sbClient.from(table).update({ data: merged, updated_at: updatedAt }).eq(keyCol, keyVal);
+      query = existing.updated_at == null ? query.is('updated_at', null) : query.eq('updated_at', existing.updated_at);
+      const { data: written, error: writeError } = await query.select(keyCol);
+      if(writeError) throw writeError;
+      if(written && written.length) return { data: merged, updatedAt };
+    } else {
+      const { error: insertError } = await sbClient.from(table).insert({ [keyCol]: keyVal, data: merged, updated_at: updatedAt });
+      if(!insertError) return { data: merged, updatedAt };
+      if(insertError.code !== '23505') throw insertError; // 23505: another device created it first — merge with theirs
+    }
+    await new Promise(r => setTimeout(r, 150 + Math.random() * 350));
+  }
+  throw new Error('The cloud copy kept changing during the save; will retry on the next save.');
+}
+// Dates this browser has seen in the cloud (opened from it, or saved to
+// it). If one goes missing, it was deleted on another device — so it
+// isn't silently recreated from what's still open here.
+const cloudConfirmedDates = new Set();
+// Per date: the cloud row's updated_at as of the last time the open
+// Builder took the cloud copy in — lets an idle tab check for teammates'
+// edits with a tiny read instead of re-saving.
+const lastSeenCloudUpdatedAt = {};
+const lastWrittenCloudUpdatedAt = {};
+const sameCloudTime = (a, b) => !!a && !!b && Date.parse(a) === Date.parse(b);
 // `base` is only passed for a snapshot of the live Builder `state` — other
 // callers push stored snapshots that the base doesn't describe.
-async function pushLiturgyToSupabase(dateStr, snapshot, base){
+// opts.live: this is the open Builder's copy (checks for deletion elsewhere).
+// opts.favorCloud: an old copy (backup file) — fills in what the cloud is
+// missing but never overwrites what it has.
+async function pushLiturgyToSupabase(dateStr, snapshot, base, opts = {}){
   if(!sbClient || !currentUser || !dateStr) return null;
+  let deletedElsewhere = false;
   try{
-    let merged = snapshot;
-    // If the cloud copy can't be read, don't push at all — pushing this
-    // device's copy unmerged could overwrite newer edits from elsewhere.
-    const { data: existing, error: readError } = await sbClient.from('liturgies').select('data').eq('service_date', dateStr).maybeSingle();
-    if(readError) throw readError;
-    if(existing && existing.data) merged = mergeFavoringContent(existing.data, snapshot, base);
-    const { error: writeError } = await sbClient.from('liturgies').upsert({
-      service_date: dateStr,
-      data: merged,
-      updated_at: new Date().toISOString()
-    }, { onConflict: 'service_date' });
-    if(writeError) throw writeError;
+    const result = await mergeAndWriteCloudRow('liturgies', 'service_date', dateStr, cloudData => {
+      if(cloudData === undefined && opts.live && cloudConfirmedDates.has(dateStr)){
+        deletedElsewhere = true;
+        return CLOUD_WRITE_SKIP;
+      }
+      if(!cloudData) return snapshot;
+      return opts.favorCloud ? mergeFavoringContent(snapshot, cloudData) : mergeFavoringContent(cloudData, snapshot, base);
+    });
     cloudSyncFailing = false;
     updateOfflineBanner();
-    return merged;
+    if(deletedElsewhere){ handleLiturgyDeletedElsewhere(dateStr); return null; }
+    cloudConfirmedDates.add(dateStr);
+    lastWrittenCloudUpdatedAt[dateStr] = result.updatedAt;
+    return result.data;
   }catch(e){
     console.error('Could not sync this service to the cloud; it is still saved locally.', e);
     cloudSyncFailing = true;
@@ -6670,15 +6769,42 @@ async function pushLiturgyToSupabase(dateStr, snapshot, base){
     return null;
   }
 }
+let deletedElsewherePrompting = false;
+async function handleLiturgyDeletedElsewhere(dateStr){
+  if(deletedElsewherePrompting) return;
+  deletedElsewherePrompting = true;
+  const keep = await customConfirm(`The service for ${formatServiceDateLabel(dateStr)} was deleted on another device. Put it back from the copy on this screen?`);
+  deletedElsewherePrompting = false;
+  cloudConfirmedDates.delete(dateStr);
+  setLiturgyCloudBase(dateStr, null);
+  if(keep){
+    lastPushedSnapshotJSON = null;
+    performAutosave();
+    return;
+  }
+  const archive = loadLiturgyArchive();
+  delete archive[dateStr];
+  try{ localStorage.setItem('liturgyArchive', JSON.stringify(archive)); }catch(e){}
+  if(document.getElementById('serviceDate').value === dateStr){
+    currentLoadedDate = null;
+    document.getElementById('serviceDate').value = '';
+    render();
+    lastSavedSnapshotJSON = buildCurrentSnapshotJSON();
+    updateCurrentDateDisplay();
+  }
+  refreshServicesPanelIfOpen();
+}
 // Returns null when the cloud has no service for that date, and undefined
 // when the cloud couldn't be reached (offline, error) — onDateChange treats
 // those differently.
 async function fetchLiturgyFromSupabase(dateStr){
   if(!sbClient || !currentUser || !dateStr) return null;
   try{
-    const { data, error } = await sbClient.from('liturgies').select('data').eq('service_date', dateStr).maybeSingle();
+    const { data, error } = await sbClient.from('liturgies').select('data, updated_at').eq('service_date', dateStr).maybeSingle();
     if(error) return undefined;
     if(!data) return null;
+    cloudConfirmedDates.add(dateStr);
+    lastSeenCloudUpdatedAt[dateStr] = data.updated_at;
     return data.data;
   }catch(e){
     console.error('Could not fetch this service from the cloud; using the local copy instead.', e);
@@ -6709,9 +6835,14 @@ async function fetchAllServiceSnapshotsFromSupabase(){
    missing from the cloud was deleted on another device. (Prayer
    versions use their own approach — see mergePrayerLibraries.)
 --------------------------------------------------------------------- */
-const DELETION_TRACKED_SHARED_KEYS = ['liturgyTemplates', 'ministerRoster', 'ministerColors', 'ministerEmails'];
+const DELETION_TRACKED_SHARED_KEYS = ['liturgyTemplates', 'ministerRoster', 'ministerColors', 'ministerEmails', 'sermonSeriesRoster', 'customLiturgicalResources'];
+// A list entry's name: plain strings, or a custom resource link's label.
+function sharedItemName(v){
+  if(typeof v === 'string') return v;
+  return v && typeof v === 'object' && typeof v.label === 'string' ? v.label : null;
+}
 function sharedItemNames(value){
-  if(Array.isArray(value)) return value.filter(v => typeof v === 'string');
+  if(Array.isArray(value)) return value.map(sharedItemName).filter(n => n !== null);
   return value && typeof value === 'object' ? Object.keys(value) : [];
 }
 function loadSyncedNames(key){
@@ -6732,7 +6863,8 @@ function mergeTrackedSharedData(key, cloudVal, localVal, pulling){
   let merged;
   if(Array.isArray(cloudVal) && Array.isArray(localVal)){
     // Plain name lists: combine both instead of keeping whichever is longer.
-    merged = [...localVal, ...cloudVal.filter(n => !localVal.includes(n))];
+    const localItemNames = new Set(localVal.map(sharedItemName));
+    merged = [...localVal, ...cloudVal.filter(n => !localItemNames.has(sharedItemName(n)))];
   } else {
     merged = mergeFavoringContent(cloudVal, localVal);
     if(merged === localVal || merged === cloudVal) return merged; // one side missing — nothing to reconcile
@@ -6742,7 +6874,7 @@ function mergeTrackedSharedData(key, cloudVal, localVal, pulling){
   const localNames = new Set(sharedItemNames(localVal));
   const cloudNames = new Set(sharedItemNames(cloudVal));
   const deleted = name => synced.has(name) && (!localNames.has(name) || (pulling && !cloudNames.has(name)));
-  if(Array.isArray(merged)) return merged.filter(n => !deleted(n));
+  if(Array.isArray(merged)) return merged.filter(n => !deleted(sharedItemName(n)));
   Object.keys(merged).forEach(name => { if(deleted(name)) delete merged[name]; });
   return merged;
 }
@@ -6767,29 +6899,59 @@ function pullTrackedSharedData(key, cloudVal, localVal){
    JSON document, keyed by name. Column widths and visibility stay
    local-only (personal, not shared).
 --------------------------------------------------------------------- */
-async function pushSharedDataToSupabase(key, data){
+// Saves that couldn't reach the cloud, retried by the 60-second roster
+// sync — a failed read no longer falls back to a blind overwrite, so
+// without this a rarely-edited list could stay local-only.
+const pendingSharedPushes = {};
+// opts.favorCloud: an old copy (backup file) — fills in what the cloud is
+// missing but never overwrites or deletes what it has.
+async function pushSharedDataToSupabase(key, data, opts = {}){
   if(!sbClient || !currentUser) return null;
   const tracked = DELETION_TRACKED_SHARED_KEYS.includes(key);
   const pushedNames = tracked ? sharedItemNames(data) : null;
   try{
-    let merged = data;
-    try{
-      const { data: existing } = await sbClient.from('shared_data').select('data').eq('key', key).maybeSingle();
-      if(existing && existing.data !== undefined && existing.data !== null){
-        if(tracked) merged = mergeTrackedSharedData(key, existing.data, data, false);
-        else if(key === 'prayerLibrary') merged = mergePrayerLibraries(existing.data, data);
-        else merged = mergeFavoringContent(existing.data, data);
+    const result = await mergeAndWriteCloudRow('shared_data', 'key', key, cloudData => {
+      if(cloudData === undefined || cloudData === null) return data;
+      if(opts.favorCloud){
+        if(Array.isArray(data) && Array.isArray(cloudData)){
+          const nameOf = v => sharedItemName(v) ?? JSON.stringify(v);
+          const cloudItemNames = new Set(cloudData.map(nameOf));
+          return [...cloudData, ...data.filter(v => !cloudItemNames.has(nameOf(v)))];
+        }
+        return mergeFavoringContent(data, cloudData);
       }
-    }catch(e){ /* couldn't pre-fetch; fall back to pushing as-is */ }
-    const { error: upsertError } = await sbClient.from('shared_data').upsert({
-      key, data: merged, updated_at: new Date().toISOString()
-    }, { onConflict: 'key' });
-    if(tracked && !upsertError) saveSyncedNames(key, pushedNames);
-    return merged;
+      // The Planner's column layout is edited as a whole — a merge would
+      // bring a deleted column straight back. But only trust this
+      // browser's layout outright if it was built on the cloud's current
+      // one; otherwise (e.g. still on a seed layout) merge as before.
+      if(key === 'scheduleColumnsConfig'){
+        const base = loadScheduleColumnsCloudBase();
+        if(base !== null && JSON.stringify(cloudData) === base) return data;
+      }
+      if(tracked) return mergeTrackedSharedData(key, cloudData, data, false);
+      if(key === 'prayerLibrary') return mergePrayerLibraries(cloudData, data);
+      return mergeFavoringContent(cloudData, data);
+    });
+    if(pendingSharedPushes[key] === data) delete pendingSharedPushes[key];
+    if(tracked) saveSyncedNames(key, pushedNames);
+    if(key === 'scheduleColumnsConfig') saveScheduleColumnsCloudBase(result.data);
+    return result.data;
   }catch(e){
     console.error('Could not sync "' + key + '" to the cloud; still saved locally.', e);
+    pendingSharedPushes[key] = data;
     return null;
   }
+}
+// The Planner column layout as of the last time this browser and the
+// cloud agreed on it (pulled or pushed).
+function loadScheduleColumnsCloudBase(){
+  try{ return localStorage.getItem('scheduleColumnsCloudBase'); }catch(e){ return null; }
+}
+function saveScheduleColumnsCloudBase(columns){
+  try{ localStorage.setItem('scheduleColumnsCloudBase', JSON.stringify(columns)); }catch(e){}
+}
+function retryPendingSharedPushes(){
+  Object.keys(pendingSharedPushes).forEach(key => pushSharedDataToSupabase(key, pendingSharedPushes[key]));
 }
 async function fetchAllSharedDataFromSupabase(){
   if(!sbClient || !currentUser) return {};
@@ -6823,10 +6985,14 @@ async function pullSharedDataOnSignIn(){
     // mergeScheduleFavoringTouched) so a background pull can't undo an
     // edit — including a deliberate blank — before it's finished saving.
     scheduleData = mergeScheduleFavoringTouched(cloud.schedule, scheduleData, scheduleTouchedDates);
+    scheduleCloudBase = JSON.parse(JSON.stringify(cloud.schedule));
     try{ localStorage.setItem('liturgySchedule', JSON.stringify(scheduleData)); }catch(e){}
   }
+  // No column edits here since this browser last matched the cloud →
+  // any cloud change (including a deleted column) was made elsewhere.
+  const columnsUnchangedHere = loadScheduleColumnsCloudBase() === JSON.stringify(scheduleColumns);
   if(Array.isArray(cloud.scheduleColumnsConfig) && cloud.scheduleColumnsConfig.length &&
-     (!scheduleColumnsHasLocalSave || cloud.scheduleColumnsConfig.length >= scheduleColumns.length)){
+     (!scheduleColumnsHasLocalSave || columnsUnchangedHere || cloud.scheduleColumnsConfig.length >= scheduleColumns.length)){
     // No real local save on this browser yet (fresh/never-customized
     // device, still on the generic seed) → adopt the cloud setup as-is,
     // whatever its size, since it's this account's actual Planner setup
@@ -6836,6 +7002,7 @@ async function pullSharedDataOnSignIn(){
     // real local customization mid-session.
     scheduleColumns = cloud.scheduleColumnsConfig;
     scheduleColumnsHasLocalSave = true;
+    saveScheduleColumnsCloudBase(scheduleColumns);
     try{ localStorage.setItem('scheduleColumnsConfig', JSON.stringify(scheduleColumns)); }catch(e){}
     if(document.getElementById('scheduleOverlay')?.classList.contains('open')) renderScheduleTable();
   }else if(!scheduleColumnsHasLocalSave && isPillarChurchName(cloud.churchName)){
@@ -6870,7 +7037,7 @@ async function pullSharedDataOnSignIn(){
   }
   updateSyncStatusIndicator();
   if(cloud.sermonSeriesRoster){
-    sermonSeriesRoster = mergeFavoringContent(cloud.sermonSeriesRoster, sermonSeriesRoster);
+    sermonSeriesRoster = pullTrackedSharedData('sermonSeriesRoster', cloud.sermonSeriesRoster, sermonSeriesRoster);
     try{ localStorage.setItem('sermonSeriesRoster', JSON.stringify(sermonSeriesRoster)); }catch(e){}
   }
   if(cloud.liturgyTemplates){
@@ -6879,7 +7046,7 @@ async function pullSharedDataOnSignIn(){
     migrateStoredTemplates();
   }
   if(cloud.customLiturgicalResources){
-    saveCustomLiturgicalResources(mergeFavoringContent(cloud.customLiturgicalResources, getCustomLiturgicalResources()));
+    saveCustomLiturgicalResources(pullTrackedSharedData('customLiturgicalResources', cloud.customLiturgicalResources, getCustomLiturgicalResources()));
   }
   if(cloud.churchName){
     try{ localStorage.setItem('churchName', cloud.churchName); }catch(e){}
@@ -7355,6 +7522,7 @@ function saveMinisterEmails(){
 --------------------------------------------------------------------- */
 async function syncRosterDataFromCloud(){
   if(!sbClient || !currentUser) return;
+  retryPendingSharedPushes();
   const cloud = await fetchAllSharedDataFromSupabase();
   if(cloud.ministerRoster){
     ministerRoster = pullTrackedSharedData('ministerRoster', cloud.ministerRoster, ministerRoster);
@@ -7369,7 +7537,7 @@ async function syncRosterDataFromCloud(){
     try{ localStorage.setItem('ministerEmails', JSON.stringify(ministerEmails)); }catch(e){}
   }
   if(cloud.sermonSeriesRoster){
-    sermonSeriesRoster = mergeFavoringContent(cloud.sermonSeriesRoster, sermonSeriesRoster);
+    sermonSeriesRoster = pullTrackedSharedData('sermonSeriesRoster', cloud.sermonSeriesRoster, sermonSeriesRoster);
     try{ localStorage.setItem('sermonSeriesRoster', JSON.stringify(sermonSeriesRoster)); }catch(e){}
   }
   if(document.getElementById('ministersOverlay')?.classList.contains('open')) renderMinisterChips();
@@ -7518,13 +7686,11 @@ async function markNotificationRead(dateStr){
   }catch(e){}
   if(sbClient && currentUser){
     try{
-      const { data: row, error: readError } = await sbClient.from('liturgies').select('data').eq('service_date', dateStr).maybeSingle();
-      if(readError) throw readError;
-      if(row && row.data){
-        addMe(row.data);
-        const { error: writeError } = await sbClient.from('liturgies').update({ data: row.data, updated_at: new Date().toISOString() }).eq('service_date', dateStr);
-        if(writeError) throw writeError;
-      }
+      await mergeAndWriteCloudRow('liturgies', 'service_date', dateStr, cloudData => {
+        if(!cloudData) return CLOUD_WRITE_SKIP;
+        addMe(cloudData);
+        return cloudData;
+      });
     }catch(e){ console.error('Could not mark this assignment read in the cloud.', e); }
   }
   myPendingNotifications = myPendingNotifications.filter(n => n.date !== dateStr);
@@ -7892,7 +8058,7 @@ function restoreAllDataFromFile(file){
     if(currentUser){
       if(payload.data.liturgyArchive && typeof payload.data.liturgyArchive === 'object'){
         for(const [dateStr, snapshot] of Object.entries(payload.data.liturgyArchive)){
-          await pushLiturgyToSupabase(dateStr, snapshot);
+          await pushLiturgyToSupabase(dateStr, snapshot, undefined, { favorCloud: true });
         }
       }
       // Note: the Planner schedule is stored locally under
@@ -7904,10 +8070,14 @@ function restoreAllDataFromFile(file){
       const CLOUD_KEY_ALIASES = { liturgySchedule: 'schedule' };
       for(const key of BACKUP_CLOUD_SHARED_KEYS){
         if(payload.data[key] !== undefined){
-          await pushSharedDataToSupabase(CLOUD_KEY_ALIASES[key] || key, payload.data[key]);
+          await pushSharedDataToSupabase(CLOUD_KEY_ALIASES[key] || key, payload.data[key], { favorCloud: true });
         }
       }
     }
+    // The restored lists are older than the cloud's — forget which names
+    // were confirmed synced, so names added since the backup don't look
+    // deleted here on the next sync.
+    DELETION_TRACKED_SHARED_KEYS.forEach(key => { try{ localStorage.removeItem('syncedNames_' + key); }catch(e){} });
     alert('Restore complete — reloading the app now.');
     window.location.reload();
   };
@@ -9441,11 +9611,27 @@ let scheduleData = {};
 // content-wiping bug. Resets on page reload, which is fine — a fresh
 // session hasn't touched anything yet.
 let scheduleTouchedDates = new Set();
-function mergeScheduleFavoringTouched(cloudSchedule, localSchedule, touchedDates){
+// The cloud Planner as of the last time this browser took it in (pulled
+// or saved). With it the merge goes cell by cell: a cell only one side
+// changed since then takes that side's value (a deliberate blank
+// included), a cell both changed keeps this browser's unless it's blank,
+// and a row removed on one side stays removed unless the other side
+// edited it. Without it (nothing pulled yet), the touched-dates rule
+// below applies as before.
+let scheduleCloudBase = null;
+function mergeScheduleFavoringTouched(cloudSchedule, localSchedule, touchedDates, base = scheduleCloudBase){
   cloudSchedule = cloudSchedule || {};
   localSchedule = localSchedule || {};
   const merged = {};
+  const sameRow = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   new Set([...Object.keys(cloudSchedule), ...Object.keys(localSchedule)]).forEach(d => {
+    if(base){
+      const c = cloudSchedule[d], l = localSchedule[d], b = base[d];
+      if(l === undefined && b !== undefined && sameRow(c, b)) return; // removed here
+      if(c === undefined && b !== undefined && sameRow(l, b)) return; // removed elsewhere
+      merged[d] = mergeFavoringContent(c, l, b);
+      return;
+    }
     if(touchedDates.has(d)){
       merged[d] = localSchedule[d] !== undefined ? localSchedule[d] : cloudSchedule[d];
     } else {
@@ -9510,18 +9696,16 @@ function loadSchedule(){
 async function saveSchedule(){
   try{ localStorage.setItem('liturgySchedule', JSON.stringify(scheduleData)); }catch(e){}
   if(!sbClient || !currentUser) return;
+  const pushed = JSON.parse(JSON.stringify(scheduleData));
   try{
-    const { data: existing } = await sbClient.from('shared_data').select('data').eq('key', 'schedule').maybeSingle();
-    const cloudSchedule = (existing && existing.data) || {};
-    const merged = mergeScheduleFavoringTouched(cloudSchedule, scheduleData, scheduleTouchedDates);
-    await sbClient.from('shared_data').upsert({
-      key: 'schedule', data: merged, updated_at: new Date().toISOString()
-    }, { onConflict: 'key' });
+    const result = await mergeAndWriteCloudRow('shared_data', 'key', 'schedule',
+      cloudData => mergeScheduleFavoringTouched(cloudData || {}, pushed, scheduleTouchedDates));
     // Adopt the reconciled result so this browser's copy also reflects
-    // anything another device saved that this session hadn't seen yet
-    // (for dates this session never touched) — without forcing a
-    // re-render mid-edit.
-    scheduleData = merged;
+    // anything another device saved that this session hadn't seen yet —
+    // keeping any cell edited here while the save was in flight — without
+    // forcing a re-render mid-edit.
+    scheduleData = mergeScheduleFavoringTouched(result.data, scheduleData, scheduleTouchedDates, pushed);
+    scheduleCloudBase = JSON.parse(JSON.stringify(result.data));
     try{ localStorage.setItem('liturgySchedule', JSON.stringify(scheduleData)); }catch(e){}
   }catch(e){
     console.error('Could not sync the Planner schedule to the cloud; still saved locally.', e);
@@ -9874,6 +10058,7 @@ async function deleteServiceFromPanel(dateStr){
   delete archive[dateStr];
   try{ localStorage.setItem('liturgyArchive', JSON.stringify(archive)); }catch(e){}
   setLiturgyCloudBase(dateStr, null);
+  cloudConfirmedDates.delete(dateStr);
   if(sbClient && currentUser){
     try{ await sbClient.from('liturgies').delete().eq('service_date', dateStr); }catch(e){ console.error('Could not delete the cloud copy of this service.', e); }
   }
@@ -9933,6 +10118,7 @@ function toggleSchedulePanel(){
       fetchAllSharedDataFromSupabase().then(cloud => {
         if(cloud.schedule){
           scheduleData = mergeScheduleFavoringTouched(cloud.schedule, scheduleData, scheduleTouchedDates);
+          scheduleCloudBase = JSON.parse(JSON.stringify(cloud.schedule));
           try{ localStorage.setItem('liturgySchedule', JSON.stringify(scheduleData)); }catch(e){}
           renderScheduleTable();
         }
@@ -10365,10 +10551,61 @@ function hasUnsavedChanges(){
   if(current === null) return false; // no service open, nothing to lose
   return current !== lastSavedSnapshotJSON;
 }
+// What this browser last got into the cloud for the open service (or
+// loaded from it). While the Builder still matches it, there's nothing to
+// save — re-saving every tick only gave a stale copy more chances to
+// overlap a teammate's save — so the tick just checks for their edits.
+let lastPushedSnapshotJSON = null;
+let liturgyPushQueuedJSON = null;
+let liturgyPushChain = Promise.resolve();
+/* Who else has the open service up right now (Supabase Realtime
+   presence — included in the free plan). Re-checked every autosave tick;
+   only joins a new channel when the open service or sign-in changes. */
+let presenceChannel = null;
+let presenceDate = null;
+function updateEditingPresence(){
+  const dateStr = (sbClient && currentUser && currentLoadedDate) || null;
+  if(dateStr === presenceDate) return;
+  if(presenceChannel){ try{ sbClient.removeChannel(presenceChannel); }catch(e){} presenceChannel = null; }
+  presenceDate = dateStr;
+  renderEditingPresence([]);
+  if(!dateStr) return;
+  try{
+    const me = currentUser.id;
+    const channel = sbClient.channel('editing-' + dateStr, { config: { presence: { key: me } } });
+    channel.on('presence', { event: 'sync' }, () => {
+      const names = Object.entries(channel.presenceState())
+        .filter(([key]) => key !== me)
+        .map(([, metas]) => metas[0] && metas[0].name)
+        .filter(Boolean);
+      renderEditingPresence([...new Set(names)]);
+    });
+    channel.subscribe(status => {
+      if(status === 'SUBSCRIBED') channel.track({ name: getCurrentUserMinister() || currentUser.email });
+    });
+    presenceChannel = channel;
+  }catch(e){ console.error('Could not check who else is editing this service.', e); }
+}
+function renderEditingPresence(names){
+  const el = document.getElementById('editingPresence');
+  if(!el) return;
+  el.textContent = names.length ? '👥 Also editing: ' + names.join(', ') : '';
+  el.classList.toggle('on', names.length > 0);
+}
 function performAutosave(){
   updateOfflineBanner(); // re-checked every tick so it can never get stuck on or off
+  updateEditingPresence();
   const dateStr = document.getElementById('serviceDate')?.value;
   if(!dateStr) return;
+  // The date box changes before onDateChange finishes loading the new
+  // service — until it does, `state` is still the previous service's.
+  if(dateStr !== currentLoadedDate) return;
+  ensureElementUids(state);
+  const currentJSON = buildCurrentSnapshotJSON();
+  if(currentUser){
+    if(currentJSON === lastPushedSnapshotJSON){ pullLiturgyUpdates(dateStr); return; }
+    if(currentJSON === liturgyPushQueuedJSON) return; // already on its way
+  }
   const assignedMinisters = computeAssignedMinisters(state);
   // notifiedMinisters tracks who's already been caught up (Phase 4 will
   // send a real notification and then update this list). Carry the prior
@@ -10393,7 +10630,7 @@ function performAutosave(){
     churchTitle: document.getElementById('churchTitle').innerText,
     serviceTitle: document.getElementById('serviceTitle').value,
     serviceDate: dateStr,
-    movements: state,
+    movements: JSON.parse(JSON.stringify(state)), // a copy — `state` can change while the save is queued
     assignedMinisters,
     notifiedMinisters,
     savedAt: Date.now()
@@ -10404,9 +10641,41 @@ function performAutosave(){
     archive[dateStr] = snapshot;
     localStorage.setItem('liturgyArchive', JSON.stringify(archive));
   }catch(e){}
-  const baseBeforePush = liturgyCloudBase[dateStr];
-  pushLiturgyToSupabase(dateStr, snapshot, baseBeforePush).then(pushedMerged => reconcileLiturgyFromCloud(dateStr, pushedMerged, baseBeforePush));
-  lastSavedSnapshotJSON = buildCurrentSnapshotJSON();
+  lastSavedSnapshotJSON = currentJSON;
+  if(!currentUser) return;
+  // One save at a time, so each starts from the base the previous one's
+  // reconcile left behind.
+  liturgyPushQueuedJSON = currentJSON;
+  liturgyPushChain = liturgyPushChain.then(async () => {
+    try{
+      const baseBeforePush = liturgyCloudBase[dateStr];
+      const pushedMerged = await pushLiturgyToSupabase(dateStr, snapshot, baseBeforePush, { live: true });
+      if(!pushedMerged || currentLoadedDate !== dateStr) return;
+      lastPushedSnapshotJSON = currentJSON;
+      reconcileLiturgyFromCloud(dateStr, pushedMerged, baseBeforePush, lastWrittenCloudUpdatedAt[dateStr]);
+    }finally{
+      if(liturgyPushQueuedJSON === currentJSON) liturgyPushQueuedJSON = null;
+    }
+  });
+}
+// The idle half of autosave: a tiny read of the row's timestamp, and only
+// if a teammate saved since this browser last took the cloud copy in, the
+// full copy — folded in the same way as after a save.
+async function pullLiturgyUpdates(dateStr){
+  if(!sbClient || !currentUser || isActivelyEditingField()) return;
+  try{
+    const { data: row, error } = await sbClient.from('liturgies').select('updated_at').eq('service_date', dateStr).maybeSingle();
+    if(error) return;
+    if(!row){
+      if(cloudConfirmedDates.has(dateStr)) handleLiturgyDeletedElsewhere(dateStr);
+      return;
+    }
+    if(sameCloudTime(row.updated_at, lastSeenCloudUpdatedAt[dateStr])) return;
+    const { data: full, error: fullError } = await sbClient.from('liturgies').select('data, updated_at').eq('service_date', dateStr).maybeSingle();
+    if(fullError || !full || !full.data) return;
+    if(buildCurrentSnapshotJSON() !== lastPushedSnapshotJSON) return; // edited meanwhile — the next save merges instead
+    reconcileLiturgyFromCloud(dateStr, full.data, liturgyCloudBase[dateStr], full.updated_at);
+  }catch(e){}
 }
 /* ---------------------------------------------------------------------
    Pull-back half of the autosave cycle. Until now, autosave only ever
@@ -10428,10 +10697,13 @@ function isActivelyEditingField(){
   if(!ae) return false;
   return ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT' || ae.isContentEditable;
 }
-function reconcileLiturgyFromCloud(dateStr, pushedMerged, baseBeforePush){
+function reconcileLiturgyFromCloud(dateStr, pushedMerged, baseBeforePush, cloudUpdatedAt){
   if(!pushedMerged || !pushedMerged.movements) return;
-  if(document.getElementById('serviceDate')?.value !== dateStr) return; // switched dates mid-round-trip
+  if(document.getElementById('serviceDate')?.value !== dateStr || currentLoadedDate !== dateStr) return; // switched dates mid-round-trip
   if(isActivelyEditingField()) return; // don't disrupt typing — retry next tick
+  // Nothing edited here since the last save → the result is exactly the
+  // cloud copy, so taking it in needn't be saved straight back.
+  const localMatchesPushed = buildCurrentSnapshotJSON() === lastPushedSnapshotJSON;
   // The base only advances once this device has actually taken in the
   // pushed result below — if it advanced on a skipped tick, a teammate's
   // new element this device never received would look "deleted here".
@@ -10455,6 +10727,7 @@ function reconcileLiturgyFromCloud(dateStr, pushedMerged, baseBeforePush){
   // here that should be the cloud side, not local.
   const reconciled = mergeFavoringContent(localSide, cloudSide, baseSide);
   setLiturgyCloudBase(dateStr, pushedMerged);
+  if(cloudUpdatedAt) lastSeenCloudUpdatedAt[dateStr] = cloudUpdatedAt;
   const withoutIds = arr => JSON.stringify(arr, (k, v) => k === 'id' ? undefined : v);
   if(withoutIds(reconciled.movements) === withoutIds(state)) return; // nothing actually changed
   state = reconciled.movements.map(m => ({
@@ -10465,6 +10738,7 @@ function reconcileLiturgyFromCloud(dateStr, pushedMerged, baseBeforePush){
   if(reconciled.serviceTitle !== undefined) document.getElementById('serviceTitle').value = reconciled.serviceTitle;
   render();
   lastSavedSnapshotJSON = buildCurrentSnapshotJSON();
+  if(localMatchesPushed) lastPushedSnapshotJSON = lastSavedSnapshotJSON;
 }
 setInterval(performAutosave, 8000);
 // Also save ~1.5s after an edit settles, so a quick edit followed by
@@ -10489,8 +10763,11 @@ window.addEventListener('beforeunload', function(){
 // moment, so mirror the same save there too: a moment's head start before
 // the tab is actually torn down is the difference between an in-flight
 // Supabase request completing or getting cut off mid-request.
+// Coming back to a tab that's been asleep: check for teammates' edits
+// (or save, if something changed here) right away instead of on the
+// next tick.
 document.addEventListener('visibilitychange', function(){
-  if(document.hidden) performAutosave();
+  performAutosave();
 });
 // Standard browser "Leave site? Changes you made may not be saved" prompt —
 // covers back-navigation, tab close, and refresh alike. Browsers show their
