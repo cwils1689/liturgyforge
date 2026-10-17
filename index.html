@@ -232,6 +232,13 @@
   .current-date-display:hover{ border-color:var(--gold); color:var(--gold); }
   .editing-presence{ display:none; font-family:'Inter',sans-serif; font-size:11px; font-weight:600; color:var(--ink-soft); }
   .editing-presence.on{ display:inline-block; }
+  .element-card{ position:relative; }
+  .presence-badge{
+    position:absolute; top:-9px; right:10px; z-index:2;
+    font-family:'Inter',sans-serif; font-size:10.5px; font-weight:600;
+    background:var(--bg); color:var(--ink-soft); border:1px solid var(--border);
+    border-radius:9px; padding:1px 7px; pointer-events:none;
+  }
   .panel-settings{
     display:flex; gap:8px; padding-bottom:12px; margin-bottom:12px; border-bottom:1px solid var(--border);
   }
@@ -1503,6 +1510,7 @@
     .resync-btn{ display:none !important; }
     .current-date-display{ display:none !important; }
     .editing-presence{ display:none !important; }
+    .presence-badge{ display:none !important; }
     .backup-nudge{ display:none !important; }
     .hymn-playback-bar{ display:none !important; }
     .hymn-play-btn{ display:none !important; }
@@ -1822,6 +1830,7 @@
   </footer>
 </div>
 
+<script src="sync.js"></script>
 <script>
 const ICONS = {
   welcome: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="3" width="12" height="18" rx="1"/><circle cx="13.5" cy="12" r="1"/><path d="M17 3v18"/></svg>',
@@ -4269,6 +4278,7 @@ function render(){
   addMovementWrap.innerHTML = `<button class="add-movement" onclick="addMovement()">+ Add Movement</button>`;
   container.appendChild(addMovementWrap);
   autoResizeAll();
+  applyElementPresenceBadges();
 }
 
 /* ---------------------------------------------------------------------
@@ -6347,6 +6357,9 @@ async function onDateChange(){
   if(currentUser){
     snap = await fetchLiturgyFromSupabase(dateStr);
     cloudUnreachable = snap === undefined;
+    // Before the baseline and the Builder are both made from it, so their
+    // element uids match.
+    if(snap && snap.movements) ensureElementUids(snap.movements);
     if(cloudUnreachable){ cloudSyncFailing = true; updateOfflineBanner(); }
     setLiturgyCloudBase(dateStr, snap);
     snapFromCloud = !!(snap && snap.movements);
@@ -6360,7 +6373,10 @@ async function onDateChange(){
   }
   if(!snap){
     const archive = loadLiturgyArchive();
-    if(archive[dateStr] && archive[dateStr].movements) snap = archive[dateStr];
+    if(archive[dateStr] && archive[dateStr].movements){
+      snap = archive[dateStr];
+      ensureElementUids(snap.movements);
+    }
   }
 
   if(snap && snap.movements){
@@ -6507,324 +6523,6 @@ async function restoreSupabaseSession(){
     console.error('Supabase session check failed; continuing local-only.', e);
   }
 }
-/* ---------------------------------------------------------------------
-   Merge-before-write helper — every cloud save used to be a blind
-   whole-row upsert, so whichever browser saved last (even a stale tab
-   that hadn't pulled recent changes) silently blanked out anything the
-   other browser had added since. This recursively merges two versions
-   of the same data, preferring whichever side actually has content in
-   each field/date/element instead of picking one whole side and
-   discarding the other. A save from a stale browser can now still add
-   its own new edits without erasing content it never saw.
-   Trade-off: this can't tell a deliberate deletion (clearing a field
-   on purpose) from staleness, so it always favors non-blank content.
-   That's intentional — for this app, silently losing content is a much
-   worse failure than a cleared field reappearing and needing to be
-   deleted again.
-
-   Arrays of movements/elements are matched by stable identity (a
-   movement's `key`, an element's `scheduleKey`, or its `type`+`title`)
-   rather than raw array position — element ids are regenerated fresh
-   every time a snapshot loads (see onDateChange), so two browsers'
-   in-memory ids never correspond to each other and can't be used to
-   line items up. Without identity matching, any element added/removed
-   on either side (shifting array length, or just order) caused this to
-   either zip mismatched elements together by index or discard one
-   side's whole array outright — silently losing unrelated content
-   (e.g. a freshly-typed Prayer of Confession) that just happened to be
-   sitting in the same movement as the actual conflict.
-
-   Deletions: the optional `baseVal` is the cloud copy this device last
-   fully took in (see liturgyCloudBase). An element/movement that was in
-   that base but is now missing from one side was deliberately deleted
-   there, so it's dropped instead of kept. Without a base (undefined),
-   behavior is unchanged — keep everything.
---------------------------------------------------------------------- */
-function objectMergeSignature(obj){
-  if(!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
-  if(obj.scheduleKey) return 'sk:' + obj.scheduleKey;
-  if(obj.key) return 'key:' + obj.key; // movements
-  if(obj.type || obj.title) return 'tt:' + (obj.type || '') + '|' + (obj.title || '');
-  if(obj.name && 'content' in obj) return 'pv:' + obj.name; // a prayer element's saved versions
-  return null;
-}
-// Gives each element a permanent id (`uid`) that's saved with it, so a
-// merge can line elements up exactly even when several share a title
-// ("Hymn", "Scripture Reading") or get reordered. The first time, it's
-// derived from the element's place in the service, so two devices
-// opening the same older service give its elements the same ids.
-function ensureElementUids(movements){
-  if(!Array.isArray(movements)) return;
-  const used = new Set();
-  movements.forEach(m => (m.elements || []).forEach(el => {
-    if(!el.uid) return;
-    if(used.has(el.uid)) delete el.uid; // a copied element — gets its own below
-    else used.add(el.uid);
-  }));
-  movements.forEach(m => {
-    const seen = {};
-    (m.elements || []).forEach(el => {
-      const sig = objectMergeSignature(el) || 'el';
-      const n = seen[sig] = (seen[sig] || 0) + 1;
-      if(el.uid) return;
-      let uid = (m.key || 'm') + '|' + sig + '|' + n;
-      for(let k = 2; used.has(uid); k++) uid = (m.key || 'm') + '|' + sig + '|' + n + '#' + k;
-      el.uid = uid;
-      used.add(uid);
-    });
-  });
-}
-function mergeObjectArrayByIdentity(cloudArr, localArr, baseArr){
-  // Items with a `uid` pair by it. An item whose uid isn't on another side
-  // is new there — unless that side has an item with no uid yet (saved by
-  // a browser still running older code) that matches the old way, in
-  // which case they pair the old way (by schedule link / type + title).
-  const sides = [cloudArr, localArr, Array.isArray(baseArr) ? baseArr : []];
-  const uidSets = sides.map(arr => new Set(arr.filter(v => v && v.uid).map(v => v.uid)));
-  const uidlessSigs = sides.map(arr => new Set(arr.filter(v => v && !v.uid).map(objectMergeSignature).filter(sig => sig !== null)));
-  const sigOf = (item, side) => {
-    const sig = objectMergeSignature(item);
-    if(sig === null || !item.uid) return sig;
-    const pairedByUid = uidSets.some((set, i) => i !== side && set.has(item.uid));
-    const legacyPartner = uidlessSigs.some((set, i) => i !== side && set.has(sig));
-    return (pairedByUid || !legacyPartner) ? 'uid:' + item.uid : sig;
-  };
-  const bucketBySig = (arr, side) => {
-    const map = new Map();
-    arr.forEach(item => {
-      const sig = sigOf(item, side);
-      if(sig === null) return; // no reliable identity — handled in the union pass below
-      if(!map.has(sig)) map.set(sig, []);
-      map.get(sig).push(item);
-    });
-    return map;
-  };
-  const localBySig = bucketBySig(localArr, 1);
-  const cloudBySig = bucketBySig(cloudArr, 0);
-  const baseBySig = Array.isArray(baseArr) ? bucketBySig(baseArr, 2) : null;
-  // How many items sharing this identity should survive. With no base,
-  // keep them all (old behavior). With a base, items one side removed
-  // since the base are subtracted — but never below what both sides
-  // still have, and never above what either side has.
-  const keepCount = sig => {
-    const c = (cloudBySig.get(sig) || []).length;
-    const l = (localBySig.get(sig) || []).length;
-    if(!baseBySig) return Math.max(c, l);
-    const b = (baseBySig.get(sig) || []).length;
-    return Math.min(Math.max(c, l), Math.max(Math.min(c, l), c + l - b));
-  };
-  const consumed = new Map();
-  const result = [];
-  cloudArr.forEach(cItem => {
-    const sig = sigOf(cItem, 0);
-    if(sig === null){ result.push(cItem); return; }
-    const bucket = localBySig.get(sig);
-    const idx = consumed.get(sig) || 0;
-    if(idx >= keepCount(sig)) return; // deleted on one side since the base
-    const baseBucket = baseBySig ? baseBySig.get(sig) : null;
-    if(bucket && idx < bucket.length){
-      result.push(mergeFavoringContent(cItem, bucket[idx], baseBucket ? baseBucket[idx] : undefined));
-    } else {
-      // No local counterpart (this device hasn't seen it, or it's a
-      // teammate's addition) — keep it rather than drop it.
-      result.push(cItem);
-    }
-    consumed.set(sig, idx + 1);
-  });
-  // Anything on the local side left unmatched — new local elements the
-  // cloud copy doesn't know about yet, plus anything with no identity
-  // signature at all (always kept, since it can't be safely paired).
-  localArr.forEach(item => {
-    const sig = sigOf(item, 1);
-    if(sig === null){ result.push(item); return; }
-    const bucket = localBySig.get(sig);
-    const idx = consumed.get(sig) || 0;
-    if(idx < bucket.length && idx < keepCount(sig)){ result.push(bucket[idx]); consumed.set(sig, idx + 1); }
-  });
-  return result;
-}
-function mergeFavoringContent(cloudVal, localVal, baseVal){
-  if(localVal === undefined || localVal === null) return cloudVal;
-  if(cloudVal === undefined || cloudVal === null) return localVal;
-  const isPlainObj = v => v && typeof v === 'object' && !Array.isArray(v);
-  if(isPlainObj(cloudVal) && isPlainObj(localVal)){
-    const merged = {};
-    new Set([...Object.keys(cloudVal), ...Object.keys(localVal)]).forEach(k => {
-      merged[k] = mergeFavoringContent(cloudVal[k], localVal[k], isPlainObj(baseVal) ? baseVal[k] : undefined);
-    });
-    return merged;
-  }
-  if(Array.isArray(cloudVal) && Array.isArray(localVal)){
-    if(cloudVal.every(isPlainObj) && localVal.every(isPlainObj) &&
-       (cloudVal.some(v => objectMergeSignature(v) !== null) || localVal.some(v => objectMergeSignature(v) !== null))){
-      return mergeObjectArrayByIdentity(cloudVal, localVal, Array.isArray(baseVal) ? baseVal : undefined);
-    }
-    if(cloudVal.length === localVal.length){
-      return cloudVal.map((cv, i) => mergeFavoringContent(cv, localVal[i]));
-    }
-    // Lengths differ and items can't be individually identified (plain
-    // strings/numbers) — matching item-by-item would risk pairing the
-    // wrong values, so just keep whichever whole array has more content.
-    const richness = v => { try{ return JSON.stringify(v).length; }catch(e){ return 0; } };
-    return richness(localVal) >= richness(cloudVal) ? localVal : cloudVal;
-  }
-  // With a base: a value this side hasn't changed since the base isn't an
-  // edit, just an old copy — so the other side's (newer) value wins.
-  if(baseVal !== undefined && baseVal !== null && localVal === baseVal && !isBlankContent(cloudVal)) return cloudVal;
-  // ...and if only this side changed it, that's a real edit — including
-  // deliberately clearing the box.
-  if(baseVal !== undefined && baseVal !== null && cloudVal === baseVal) return localVal;
-  if(isBlankContent(localVal) && !isBlankContent(cloudVal)) return cloudVal;
-  return localVal;
-}
-// A rich-text box that looks empty is often saved as "<br>" (Safari on
-// iPhone especially) rather than "" — treat those as blank so one can't
-// overwrite real text in a merge.
-function isBlankContent(v){
-  if(typeof v !== 'string') return false;
-  return v.replace(/<br\s*\/?>/gi, '').replace(/&nbsp;/gi, '').replace(/<\/?(p|div|span)\b[^>]*>/gi, '').trim() === '';
-}
-// Per date: a copy of the cloud version the open Builder has fully taken
-// in — set when a service is opened from the cloud and after each
-// successful reconcile. It's what lets a merge tell "deleted here" apart
-// from "added elsewhere". Deep-copied so later edits to `state` can't
-// change it. No entry = no deletion tracking for that date (old behavior).
-const liturgyCloudBase = {};
-function setLiturgyCloudBase(dateStr, data){
-  if(!dateStr) return;
-  if(data && data.movements){
-    try{ liturgyCloudBase[dateStr] = JSON.parse(JSON.stringify(data)); return; }catch(e){}
-  }
-  delete liturgyCloudBase[dateStr];
-}
-/* ---------------------------------------------------------------------
-   Conditional cloud writes. A plain read → merge → upsert let two devices
-   overlap: B reads, A saves, B writes back what it read — silently undoing
-   A's edit. This only lands the write if the row's updated_at is still
-   what was read; if someone saved in between, it re-reads and merges
-   again. A failed read throws — it never falls back to writing this
-   device's copy unmerged. `mergeFn(cloudData)` gets undefined when the row
-   doesn't exist yet, and can return CLOUD_WRITE_SKIP to write nothing.
---------------------------------------------------------------------- */
-const CLOUD_WRITE_SKIP = {};
-async function mergeAndWriteCloudRow(table, keyCol, keyVal, mergeFn){
-  for(let attempt = 0; attempt < 5; attempt++){
-    const { data: existing, error: readError } = await sbClient.from(table).select('data, updated_at').eq(keyCol, keyVal).maybeSingle();
-    if(readError) throw readError;
-    const merged = mergeFn(existing ? existing.data : undefined);
-    if(merged === CLOUD_WRITE_SKIP) return { skipped: true };
-    const updatedAt = new Date().toISOString();
-    if(existing){
-      let query = sbClient.from(table).update({ data: merged, updated_at: updatedAt }).eq(keyCol, keyVal);
-      query = existing.updated_at == null ? query.is('updated_at', null) : query.eq('updated_at', existing.updated_at);
-      const { data: written, error: writeError } = await query.select(keyCol);
-      if(writeError) throw writeError;
-      if(written && written.length) return { data: merged, updatedAt };
-    } else {
-      const { error: insertError } = await sbClient.from(table).insert({ [keyCol]: keyVal, data: merged, updated_at: updatedAt });
-      if(!insertError) return { data: merged, updatedAt };
-      if(insertError.code !== '23505') throw insertError; // 23505: another device created it first — merge with theirs
-    }
-    await new Promise(r => setTimeout(r, 150 + Math.random() * 350));
-  }
-  throw new Error('The cloud copy kept changing during the save; will retry on the next save.');
-}
-// Dates this browser has seen in the cloud (opened from it, or saved to
-// it). If one goes missing, it was deleted on another device — so it
-// isn't silently recreated from what's still open here.
-const cloudConfirmedDates = new Set();
-// Per date: the cloud row's updated_at as of the last time the open
-// Builder took the cloud copy in — lets an idle tab check for teammates'
-// edits with a tiny read instead of re-saving.
-const lastSeenCloudUpdatedAt = {};
-const lastWrittenCloudUpdatedAt = {};
-const sameCloudTime = (a, b) => !!a && !!b && Date.parse(a) === Date.parse(b);
-// `base` is only passed for a snapshot of the live Builder `state` — other
-// callers push stored snapshots that the base doesn't describe.
-// opts.live: this is the open Builder's copy (checks for deletion elsewhere).
-// opts.favorCloud: an old copy (backup file) — fills in what the cloud is
-// missing but never overwrites what it has.
-async function pushLiturgyToSupabase(dateStr, snapshot, base, opts = {}){
-  if(!sbClient || !currentUser || !dateStr) return null;
-  let deletedElsewhere = false;
-  try{
-    const result = await mergeAndWriteCloudRow('liturgies', 'service_date', dateStr, cloudData => {
-      if(cloudData === undefined && opts.live && cloudConfirmedDates.has(dateStr)){
-        deletedElsewhere = true;
-        return CLOUD_WRITE_SKIP;
-      }
-      if(!cloudData) return snapshot;
-      return opts.favorCloud ? mergeFavoringContent(snapshot, cloudData) : mergeFavoringContent(cloudData, snapshot, base);
-    });
-    cloudSyncFailing = false;
-    updateOfflineBanner();
-    if(deletedElsewhere){ handleLiturgyDeletedElsewhere(dateStr); return null; }
-    cloudConfirmedDates.add(dateStr);
-    lastWrittenCloudUpdatedAt[dateStr] = result.updatedAt;
-    return result.data;
-  }catch(e){
-    console.error('Could not sync this service to the cloud; it is still saved locally.', e);
-    cloudSyncFailing = true;
-    updateOfflineBanner();
-    return null;
-  }
-}
-let deletedElsewherePrompting = false;
-async function handleLiturgyDeletedElsewhere(dateStr){
-  if(deletedElsewherePrompting) return;
-  deletedElsewherePrompting = true;
-  const keep = await customConfirm(`The service for ${formatServiceDateLabel(dateStr)} was deleted on another device. Put it back from the copy on this screen?`);
-  deletedElsewherePrompting = false;
-  cloudConfirmedDates.delete(dateStr);
-  setLiturgyCloudBase(dateStr, null);
-  if(keep){
-    lastPushedSnapshotJSON = null;
-    performAutosave();
-    return;
-  }
-  const archive = loadLiturgyArchive();
-  delete archive[dateStr];
-  try{ localStorage.setItem('liturgyArchive', JSON.stringify(archive)); }catch(e){}
-  if(document.getElementById('serviceDate').value === dateStr){
-    currentLoadedDate = null;
-    document.getElementById('serviceDate').value = '';
-    render();
-    lastSavedSnapshotJSON = buildCurrentSnapshotJSON();
-    updateCurrentDateDisplay();
-  }
-  refreshServicesPanelIfOpen();
-}
-// Returns null when the cloud has no service for that date, and undefined
-// when the cloud couldn't be reached (offline, error) — onDateChange treats
-// those differently.
-async function fetchLiturgyFromSupabase(dateStr){
-  if(!sbClient || !currentUser || !dateStr) return null;
-  try{
-    const { data, error } = await sbClient.from('liturgies').select('data, updated_at').eq('service_date', dateStr).maybeSingle();
-    if(error) return undefined;
-    if(!data) return null;
-    cloudConfirmedDates.add(dateStr);
-    lastSeenCloudUpdatedAt[dateStr] = data.updated_at;
-    return data.data;
-  }catch(e){
-    console.error('Could not fetch this service from the cloud; using the local copy instead.', e);
-    return undefined;
-  }
-}
-async function fetchAllServiceSnapshotsFromSupabase(){
-  if(!sbClient || !currentUser) return {};
-  try{
-    const { data, error } = await sbClient.from('liturgies').select('service_date, data');
-    if(error || !data) return {};
-    const result = {};
-    data.forEach(row => { result[row.service_date] = row.data; });
-    return result;
-  }catch(e){
-    console.error('Could not fetch the service list from the cloud; showing local services only.', e);
-    return {};
-  }
-}
-
 /* ---------------------------------------------------------------------
    Deletions for named shared lists — templates, the minister roster, and
    ministers' colors and login emails. The merge above always keeps a
@@ -10551,206 +10249,6 @@ function hasUnsavedChanges(){
   if(current === null) return false; // no service open, nothing to lose
   return current !== lastSavedSnapshotJSON;
 }
-// What this browser last got into the cloud for the open service (or
-// loaded from it). While the Builder still matches it, there's nothing to
-// save — re-saving every tick only gave a stale copy more chances to
-// overlap a teammate's save — so the tick just checks for their edits.
-let lastPushedSnapshotJSON = null;
-let liturgyPushQueuedJSON = null;
-let liturgyPushChain = Promise.resolve();
-/* Who else has the open service up right now (Supabase Realtime
-   presence — included in the free plan). Re-checked every autosave tick;
-   only joins a new channel when the open service or sign-in changes. */
-let presenceChannel = null;
-let presenceDate = null;
-function updateEditingPresence(){
-  const dateStr = (sbClient && currentUser && currentLoadedDate) || null;
-  if(dateStr === presenceDate) return;
-  if(presenceChannel){ try{ sbClient.removeChannel(presenceChannel); }catch(e){} presenceChannel = null; }
-  presenceDate = dateStr;
-  renderEditingPresence([]);
-  if(!dateStr) return;
-  try{
-    const me = currentUser.id;
-    const channel = sbClient.channel('editing-' + dateStr, { config: { presence: { key: me } } });
-    channel.on('presence', { event: 'sync' }, () => {
-      const names = Object.entries(channel.presenceState())
-        .filter(([key]) => key !== me)
-        .map(([, metas]) => metas[0] && metas[0].name)
-        .filter(Boolean);
-      renderEditingPresence([...new Set(names)]);
-    });
-    channel.subscribe(status => {
-      if(status === 'SUBSCRIBED') channel.track({ name: getCurrentUserMinister() || currentUser.email });
-    });
-    presenceChannel = channel;
-  }catch(e){ console.error('Could not check who else is editing this service.', e); }
-}
-function renderEditingPresence(names){
-  const el = document.getElementById('editingPresence');
-  if(!el) return;
-  el.textContent = names.length ? '👥 Also editing: ' + names.join(', ') : '';
-  el.classList.toggle('on', names.length > 0);
-}
-function performAutosave(){
-  updateOfflineBanner(); // re-checked every tick so it can never get stuck on or off
-  updateEditingPresence();
-  const dateStr = document.getElementById('serviceDate')?.value;
-  if(!dateStr) return;
-  // The date box changes before onDateChange finishes loading the new
-  // service — until it does, `state` is still the previous service's.
-  if(dateStr !== currentLoadedDate) return;
-  ensureElementUids(state);
-  const currentJSON = buildCurrentSnapshotJSON();
-  if(currentUser){
-    if(currentJSON === lastPushedSnapshotJSON){ pullLiturgyUpdates(dateStr); return; }
-    if(currentJSON === liturgyPushQueuedJSON) return; // already on its way
-  }
-  const assignedMinisters = computeAssignedMinisters(state);
-  // notifiedMinisters tracks who's already been caught up (Phase 4 will
-  // send a real notification and then update this list). Carry the prior
-  // value forward untouched so a name added later shows up as a genuine
-  // diff — but the FIRST time this field exists for a date, bootstrap it
-  // to the current assignments so Phase 2's rollout doesn't retroactively
-  // look like everyone was "just assigned" once Phase 4 ships.
-  let notifiedMinisters = assignedMinisters;
-  try{
-    const prior = loadLiturgyArchive()[dateStr];
-    if(prior && Array.isArray(prior.notifiedMinisters)) notifiedMinisters = prior.notifiedMinisters;
-  }catch(e){}
-  // If the person currently saving is themselves one of the assigned
-  // ministers, they don't need a notification for their own action —
-  // mark them caught up immediately rather than surfacing "new
-  // assignment: you" for something they just did themselves.
-  const savingAsMinister = getCurrentUserMinister();
-  if(savingAsMinister && assignedMinisters.includes(savingAsMinister) && !notifiedMinisters.includes(savingAsMinister)){
-    notifiedMinisters = [...notifiedMinisters, savingAsMinister];
-  }
-  const snapshot = {
-    churchTitle: document.getElementById('churchTitle').innerText,
-    serviceTitle: document.getElementById('serviceTitle').value,
-    serviceDate: dateStr,
-    movements: JSON.parse(JSON.stringify(state)), // a copy — `state` can change while the save is queued
-    assignedMinisters,
-    notifiedMinisters,
-    savedAt: Date.now()
-  };
-  try{
-    localStorage.setItem('currentAutosave', JSON.stringify(snapshot));
-    const archive = loadLiturgyArchive();
-    archive[dateStr] = snapshot;
-    localStorage.setItem('liturgyArchive', JSON.stringify(archive));
-  }catch(e){}
-  lastSavedSnapshotJSON = currentJSON;
-  if(!currentUser) return;
-  // One save at a time, so each starts from the base the previous one's
-  // reconcile left behind.
-  liturgyPushQueuedJSON = currentJSON;
-  liturgyPushChain = liturgyPushChain.then(async () => {
-    try{
-      const baseBeforePush = liturgyCloudBase[dateStr];
-      const pushedMerged = await pushLiturgyToSupabase(dateStr, snapshot, baseBeforePush, { live: true });
-      if(!pushedMerged || currentLoadedDate !== dateStr) return;
-      lastPushedSnapshotJSON = currentJSON;
-      reconcileLiturgyFromCloud(dateStr, pushedMerged, baseBeforePush, lastWrittenCloudUpdatedAt[dateStr]);
-    }finally{
-      if(liturgyPushQueuedJSON === currentJSON) liturgyPushQueuedJSON = null;
-    }
-  });
-}
-// The idle half of autosave: a tiny read of the row's timestamp, and only
-// if a teammate saved since this browser last took the cloud copy in, the
-// full copy — folded in the same way as after a save.
-async function pullLiturgyUpdates(dateStr){
-  if(!sbClient || !currentUser || isActivelyEditingField()) return;
-  try{
-    const { data: row, error } = await sbClient.from('liturgies').select('updated_at').eq('service_date', dateStr).maybeSingle();
-    if(error) return;
-    if(!row){
-      if(cloudConfirmedDates.has(dateStr)) handleLiturgyDeletedElsewhere(dateStr);
-      return;
-    }
-    if(sameCloudTime(row.updated_at, lastSeenCloudUpdatedAt[dateStr])) return;
-    const { data: full, error: fullError } = await sbClient.from('liturgies').select('data, updated_at').eq('service_date', dateStr).maybeSingle();
-    if(fullError || !full || !full.data) return;
-    if(buildCurrentSnapshotJSON() !== lastPushedSnapshotJSON) return; // edited meanwhile — the next save merges instead
-    reconcileLiturgyFromCloud(dateStr, full.data, liturgyCloudBase[dateStr], full.updated_at);
-  }catch(e){}
-}
-/* ---------------------------------------------------------------------
-   Pull-back half of the autosave cycle. Until now, autosave only ever
-   pushed outward — merged favoring THIS device's content, but never
-   folded anything back in — so a browser left open on one date for a
-   while had no way to learn about edits another signed-in device made
-   to that same service, and its own next push (still favoring local on
-   any non-blank conflict) could silently re-assert its stale copy over
-   a teammate's newer one. pushLiturgyToSupabase() above already folds
-   this device's edits into the cloud row, so it's now safe to fold the
-   *cloud* result back into `state` — this time favoring the cloud side
-   — closing the loop within one ~8s tick instead of only ever pushing.
-   Skipped entirely while the user has a field focused, so it can never
-   yank a cursor or in-progress keystroke out from under them; it just
-   waits for the next tick once they pause.
---------------------------------------------------------------------- */
-function isActivelyEditingField(){
-  const ae = document.activeElement;
-  if(!ae) return false;
-  return ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT' || ae.isContentEditable;
-}
-function reconcileLiturgyFromCloud(dateStr, pushedMerged, baseBeforePush, cloudUpdatedAt){
-  if(!pushedMerged || !pushedMerged.movements) return;
-  if(document.getElementById('serviceDate')?.value !== dateStr || currentLoadedDate !== dateStr) return; // switched dates mid-round-trip
-  if(isActivelyEditingField()) return; // don't disrupt typing — retry next tick
-  // Nothing edited here since the last save → the result is exactly the
-  // cloud copy, so taking it in needn't be saved straight back.
-  const localMatchesPushed = buildCurrentSnapshotJSON() === lastPushedSnapshotJSON;
-  // The base only advances once this device has actually taken in the
-  // pushed result below — if it advanced on a skipped tick, a teammate's
-  // new element this device never received would look "deleted here".
-  const baseSide = baseBeforePush && {
-    churchTitle: baseBeforePush.churchTitle,
-    serviceTitle: baseBeforePush.serviceTitle,
-    movements: baseBeforePush.movements
-  };
-  const localSide = {
-    churchTitle: document.getElementById('churchTitle').innerText,
-    serviceTitle: document.getElementById('serviceTitle').value,
-    movements: state
-  };
-  const cloudSide = {
-    churchTitle: pushedMerged.churchTitle,
-    serviceTitle: pushedMerged.serviceTitle,
-    movements: pushedMerged.movements
-  };
-  // Argument order intentionally reversed from every other call in this
-  // file — mergeFavoringContent's second argument wins a conflict, and
-  // here that should be the cloud side, not local.
-  const reconciled = mergeFavoringContent(localSide, cloudSide, baseSide);
-  setLiturgyCloudBase(dateStr, pushedMerged);
-  if(cloudUpdatedAt) lastSeenCloudUpdatedAt[dateStr] = cloudUpdatedAt;
-  const withoutIds = arr => JSON.stringify(arr, (k, v) => k === 'id' ? undefined : v);
-  if(withoutIds(reconciled.movements) === withoutIds(state)) return; // nothing actually changed
-  state = reconciled.movements.map(m => ({
-    ...m,
-    elements: m.elements.map(el => ({ ...migrateElement(el), id: newId() }))
-  }));
-  if(reconciled.churchTitle !== undefined) document.getElementById('churchTitle').innerText = reconciled.churchTitle;
-  if(reconciled.serviceTitle !== undefined) document.getElementById('serviceTitle').value = reconciled.serviceTitle;
-  render();
-  lastSavedSnapshotJSON = buildCurrentSnapshotJSON();
-  if(localMatchesPushed) lastPushedSnapshotJSON = lastSavedSnapshotJSON;
-}
-setInterval(performAutosave, 8000);
-// Also save ~1.5s after an edit settles, so a quick edit followed by
-// closing the app doesn't have to wait for the next 8s tick.
-let quickAutosaveTimer = null;
-function scheduleQuickAutosave(){
-  clearTimeout(quickAutosaveTimer);
-  quickAutosaveTimer = setTimeout(() => { if(hasUnsavedChanges()) performAutosave(); }, 1500);
-}
-// Typing, dropdowns, taps/clicks and drag-and-drop all end in one of these;
-// hasUnsavedChanges() keeps it from pushing when nothing actually changed.
-['input', 'change', 'pointerup', 'keyup'].forEach(evt => document.addEventListener(evt, scheduleQuickAutosave));
 setInterval(refreshNotifications, 60000);
 window.addEventListener('beforeunload', function(){
   performAutosave();
@@ -10763,12 +10261,6 @@ window.addEventListener('beforeunload', function(){
 // moment, so mirror the same save there too: a moment's head start before
 // the tab is actually torn down is the difference between an in-flight
 // Supabase request completing or getting cut off mid-request.
-// Coming back to a tab that's been asleep: check for teammates' edits
-// (or save, if something changed here) right away instead of on the
-// next tick.
-document.addEventListener('visibilitychange', function(){
-  performAutosave();
-});
 // Standard browser "Leave site? Changes you made may not be saved" prompt —
 // covers back-navigation, tab close, and refresh alike. Browsers show their
 // own fixed wording regardless of what's set here. Only fires when there
