@@ -10593,6 +10593,10 @@ function buildCurrentSnapshotJSON(){
 function hasUnsavedChanges(){
   const current = buildCurrentSnapshotJSON();
   if(current === null) return false; // no service open, nothing to lose
+  // Signed in and exactly what the cloud has (e.g. a service just opened
+  // and not edited) — autosave skips those, so lastSavedSnapshotJSON
+  // isn't updated for them.
+  if(currentUser && current === lastPushedSnapshotJSON) return false;
   return current !== lastSavedSnapshotJSON;
 }
 // What this browser last got into the cloud for the open service (or
@@ -10906,7 +10910,7 @@ function snoozeBackupNudge(){
    a reload once a newer version is out. Bump APP_VERSION and
    version.json together on every release (see CHANGELOG.md).
 --------------------------------------------------------------------- */
-const APP_VERSION = '0.9.0';
+const APP_VERSION = '0.9.1';
 document.getElementById('appVersion').textContent = 'v' + APP_VERSION;
 function customAlert(message){
   const cancel = document.getElementById('modalCancel');
