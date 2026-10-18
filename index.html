@@ -4769,16 +4769,6 @@ function updateField(id, field, value){
   if(el.type === 'response') refreshResponsePrint(id);
 }
 
-function updateVariantContent(id, variantId, value){
-  const el = findEl(id);
-  if(!el || !el.variants) return;
-  const v = el.variants.find(v => v.id === variantId);
-  if(v) v.content = value;
-  const target = document.querySelector(`.element-card[data-id="${id}"] .print-response p`);
-  if(target) target.innerHTML = formatMarkup(value);
-  syncElementBackToSchedule(id);
-}
-
 function refreshResponsePrint(id){
   const el = findEl(id);
   const target = document.querySelector(`.element-card[data-id="${id}"] .print-response`);
@@ -4901,9 +4891,6 @@ function applyListFormatting(html){
     }
   }
   return out.join('\n');
-}
-function withRichToolbar(textareaHtml){
-  return `<div class="rt-field">${textareaHtml}</div>`;
 }
 
 /* ---------------------------------------------------------------------
@@ -5072,37 +5059,6 @@ function applyFloatingFormat(before, after){
   const newStart = start + before.length;
   ta.focus();
   ta.setSelectionRange(newStart, newStart + selected.length);
-  hideFloatingToolbar();
-}
-function applyListFormat(type){
-  if(activeRichEditor){
-    document.execCommand(type === 'ol' ? 'insertOrderedList' : 'insertUnorderedList');
-    persistRichEditorContent(activeRichEditor);
-    hideFloatingToolbar();
-    return;
-  }
-  if(!activeTextarea) return;
-  const ta = activeTextarea;
-  const val = ta.value;
-  const start = ta.selectionStart, end = ta.selectionEnd;
-  const lineStart = val.lastIndexOf('\n', start - 1) + 1;
-  let lineEnd = val.indexOf('\n', end);
-  if(lineEnd === -1) lineEnd = val.length;
-  const block = val.slice(lineStart, lineEnd);
-  const lines = block.split('\n');
-  const stripPrefix = l => l.replace(/^\s*\d+[.)]\s+/, '').replace(/^\s*[-*•]\s+/, '');
-  let n = 1;
-  const newLines = lines.map(l => {
-    if(!l.trim()) return l;
-    const bare = stripPrefix(l);
-    return type === 'ol' ? `${n++}. ${bare}` : `- ${bare}`;
-  });
-  const newBlock = newLines.join('\n');
-  ta.value = val.slice(0, lineStart) + newBlock + val.slice(lineEnd);
-  ta.dispatchEvent(new Event('input', { bubbles: true }));
-  ta.focus();
-  const newPos = lineStart + newBlock.length;
-  ta.setSelectionRange(newPos, newPos);
   hideFloatingToolbar();
 }
 document.addEventListener('mouseup', function(e){
@@ -6923,9 +6879,6 @@ async function autoFetchAllForElement(el){
     const list = el.readings || el.sections;
     for(const r of list){ await autoFetchEsvForReading(el.id, r.key); }
   }
-}
-async function autoFetchAllInLiturgy(){
-  for(const m of state) for(const el of m.elements){ await autoFetchAllForElement(el); }
 }
 
 /* ---------------------------------------------------------------------
