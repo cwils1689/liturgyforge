@@ -25,7 +25,7 @@
    A change ("op") names its target by path: field names, plus
    {field, id} steps for items in lists that have an identity field
    (elements by uid, movements by key, sections/readings by key,
-   variants by id). Lists without one — plain values like names — are
+   variants by id, resource links by label). Lists without one — plain values like names — are
    compared by membership, or replaced whole if reordered.
      set / unset   a field's new value, or its removal. A new object
                    (`fresh`: nothing there in the baseline, like a
@@ -37,7 +37,7 @@
      remove        a list item deleted here (`was` = it, as of the baseline)
      order         this device's order for a list it reordered
 --------------------------------------------------------------------- */
-const SYNC_IDENTITY_FIELDS = ['uid', 'key', 'id', 'name'];
+const SYNC_IDENTITY_FIELDS = ['uid', 'key', 'id', 'name', 'label'];
 function syncIsPlainObject(v){ return !!v && typeof v === 'object' && !Array.isArray(v); }
 function syncClone(v){ return v === undefined ? undefined : JSON.parse(JSON.stringify(v)); }
 // Key order varies between copies of the same object, so compare with
@@ -795,12 +795,26 @@ document.addEventListener('visibilitychange', function(){
 
 /* =====================================================================
    Shared documents — rows of the shared_data table that every device
-   edits: the Planner and its column layout. Same model as services, with
-   the baseline kept in localStorage (per account) so it survives a
-   reload. Each entry says how to read and replace this browser's copy,
-   and how to merge when there's no baseline yet (the first sync on a
-   browser, or after a backup restore).
+   edits: the Planner, its column layout, and the shared lists and
+   settings. Same model as services, with the baseline kept in
+   localStorage (per account) so it survives a reload. Each entry says
+   how to read and replace this browser's copy, and how to merge when
+   there's no baseline yet (the first sync on a browser, or after a
+   backup restore). Adding, removing or editing an entry in a list is a
+   change like any other, so a deletion sticks without extra tracking.
    ===================================================================== */
+// An entry for a value kept in a variable and in localStorage as JSON.
+function storedSharedDoc(storageKey, get, assign){
+  return {
+    get,
+    set: v => {
+      assign(v);
+      try{ localStorage.setItem(storageKey, JSON.stringify(v)); }catch(e){}
+    },
+    mergeWithoutBase: mergeSharedWithoutBase,
+    takeInWithoutBase: mergeSharedWithoutBase,
+  };
+}
 const SHARED_DOCS = {
   // The Planner: { 'YYYY-MM-DD': { columnKey: value, … } }. Each cell is
   // its own change, so two people editing different cells — even in the
@@ -828,7 +842,48 @@ const SHARED_DOCS = {
     // its own saved layout keeps it unless the cloud's is at least as big.
     takeInWithoutBase: (cloud, local) => (!scheduleColumnsHasLocalSave || cloud.length >= local.length) ? cloud : local,
   },
+  ministerRoster: storedSharedDoc('ministerRoster', () => ministerRoster, v => { ministerRoster = v; }),
+  ministerColors: storedSharedDoc('ministerColors', () => ministerColors, v => { ministerColors = v; }),
+  ministerEmails: storedSharedDoc('ministerEmails', () => ministerEmails, v => { ministerEmails = v; }),
+  sermonSeriesRoster: storedSharedDoc('sermonSeriesRoster', () => sermonSeriesRoster, v => { sermonSeriesRoster = v; }),
+  liturgyTemplates: storedSharedDoc('liturgyTemplates', () => liturgyTemplates, v => { liturgyTemplates = v; }),
+  customLiturgicalResources: storedSharedDoc('customLiturgicalResources', () => getCustomLiturgicalResources(), () => {}),
+  // Prayer versions also live on as copies in services and templates, so
+  // deletions are recorded in the library itself (PRAYER_DELETED_KEY);
+  // mergePrayerLibraries honors them when there's no baseline.
+  prayerLibrary: {
+    ...storedSharedDoc('prayerLibrary', () => prayerLibrary, v => { prayerLibrary = v; }),
+    mergeWithoutBase: (cloud, local) => mergePrayerLibraries(cloud, local),
+    takeInWithoutBase: (cloud, local) => mergePrayerLibraries(cloud, local),
+  },
+  // Single values, stored as plain strings.
+  churchName: {
+    get: () => loadChurchName(),
+    set: v => { try{ localStorage.setItem('churchName', v); }catch(e){} },
+    mergeWithoutBase: (cloud, local) => mergeFavoringContent(cloud, local),
+    takeInWithoutBase: cloud => cloud,
+  },
+  defaultTemplateName: {
+    get: () => defaultTemplateName,
+    set: v => {
+      defaultTemplateName = v || '';
+      try{ localStorage.setItem('defaultTemplateName', defaultTemplateName); }catch(e){}
+    },
+    mergeWithoutBase: (cloud, local) => local,
+    takeInWithoutBase: cloud => cloud,
+  },
 };
+// Without a baseline: lists combine both sides; anything else merges
+// whole copies, favoring whichever side has content.
+function mergeSharedWithoutBase(cloud, local){
+  if(Array.isArray(cloud) && Array.isArray(local)) return [...local, ...cloud.filter(c => !local.some(l => syncSame(l, c)))];
+  return mergeFavoringContent(cloud, local);
+}
+// This device's changes since `base`, replayed on `cloud`. Wrapped, so a
+// document that's a single value or a list works the same as an object.
+function sharedRebase(cloud, local, base){
+  return syncRebase({ v: cloud }, { v: local }, { v: base }).v;
+}
 // Without a baseline: cell by cell, whichever side has content.
 function mergeScheduleWithoutBase(cloud, local){
   cloud = cloud || {};
@@ -853,7 +908,15 @@ function loadSharedCloudBase(key){
 }
 function saveSharedCloudBase(key, data){
   if(!currentUser) return;
-  try{ localStorage.setItem('sharedCloudBase_' + key, JSON.stringify({ userId: currentUser.id, data })); }catch(e){}
+  try{ localStorage.setItem('sharedCloudBase_' + key, JSON.stringify({ userId: currentUser.id, data })); }
+  catch(e){
+    // Storage full: an outdated baseline would make old values look like
+    // edits made here, so drop it and fall back to the merge instead.
+    try{
+      localStorage.removeItem('sharedCloudBase_' + key);
+      if(key === 'scheduleColumnsConfig') localStorage.removeItem('scheduleColumnsCloudBase');
+    }catch(e2){}
+  }
 }
 // After a backup restore: this browser's copies are older than the cloud,
 // so differences from the old baselines aren't edits made here.
@@ -879,14 +942,14 @@ function saveSharedDoc(key){
       const base = loadSharedCloudBase(key);
       const result = await mergeAndWriteCloudRow('shared_data', 'key', key, cloud => {
         if(cloud === undefined || cloud === null) return sent;
-        return base === null ? doc.mergeWithoutBase(cloud, sent) : syncApply(cloud, syncDiff(base, sent), sent);
+        return base === null ? doc.mergeWithoutBase(cloud, sent) : sharedRebase(cloud, sent, base);
       });
       sharedDocsPending.delete(key);
       sharedDocLastWriteSeq[key] = ++sharedDocWriteSeq;
       saveSharedCloudBase(key, result.data);
       // Take in what other devices saved, keeping anything edited here
       // while this save was on its way. No re-render — it may be mid-edit.
-      const next = syncRebase(result.data, doc.get(), sent);
+      const next = sharedRebase(result.data, doc.get(), sent);
       if(!syncSame(next, doc.get())) doc.set(next);
       return result.data;
     }catch(e){
@@ -913,11 +976,27 @@ function takeInSharedDoc(key, cloud){
   const doc = SHARED_DOCS[key];
   const base = loadSharedCloudBase(key);
   const local = doc.get();
-  const next = base === null ? doc.takeInWithoutBase(cloud, local) : syncRebase(cloud, local, base);
+  const next = base === null ? doc.takeInWithoutBase(cloud, local) : sharedRebase(cloud, local, base);
   saveSharedCloudBase(key, cloud);
   if(syncSame(next, local)) return false;
   doc.set(next);
   return true;
+}
+// A backup file being restored: older than the cloud, so it only fills
+// in what the cloud is missing and never overwrites or deletes anything.
+async function pushBackupSharedData(key, data){
+  if(!sbClient || !currentUser) return null;
+  try{
+    const result = await mergeAndWriteCloudRow('shared_data', 'key', key, cloud => {
+      if(cloud === undefined || cloud === null) return data;
+      if(Array.isArray(cloud) && Array.isArray(data)) return mergeSharedWithoutBase(data, cloud);
+      return mergeFavoringContent(data, cloud);
+    });
+    return result.data;
+  }catch(e){
+    console.error('Could not restore "' + key + '" to the cloud.', e);
+    return null;
+  }
 }
 async function fetchAllSharedDataFromSupabase(){
   if(!sbClient || !currentUser) return {};

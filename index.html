@@ -5387,7 +5387,7 @@ function loadLiturgyTemplates(){
 }
 function saveLiturgyTemplatesToStorage(){
   try{ localStorage.setItem('liturgyTemplates', JSON.stringify(liturgyTemplates)); }catch(e){}
-  pushSharedDataToSupabase('liturgyTemplates', liturgyTemplates);
+  saveSharedDoc('liturgyTemplates');
 }
 /* ---------------------------------------------------------------------
    Per-account "default template" preference — which named template
@@ -5412,7 +5412,7 @@ function loadDefaultTemplateName(){
 function setDefaultTemplateName(name){
   defaultTemplateName = name || '';
   try{ localStorage.setItem('defaultTemplateName', defaultTemplateName); }catch(e){}
-  pushSharedDataToSupabase('defaultTemplateName', defaultTemplateName);
+  saveSharedDoc('defaultTemplateName');
   renderTemplatesMenuContent();
 }
 function getEffectiveDefaultTemplate(){
@@ -6534,119 +6534,13 @@ async function restoreSupabaseSession(){
   }
 }
 /* ---------------------------------------------------------------------
-   Deletions for named shared lists — templates, the minister roster, and
-   ministers' colors and login emails. The merge above always keeps a
-   name the cloud has and this browser doesn't, so a deleted/removed/
-   unlinked entry came right back. This remembers which names this
-   browser has confirmed are in the cloud (per signed-in account): a
-   name on that list that's missing locally was deleted here, and one
-   missing from the cloud was deleted on another device. (Prayer
-   versions use their own approach — see mergePrayerLibraries.)
---------------------------------------------------------------------- */
-const DELETION_TRACKED_SHARED_KEYS = ['liturgyTemplates', 'ministerRoster', 'ministerColors', 'ministerEmails', 'sermonSeriesRoster', 'customLiturgicalResources'];
-// A list entry's name: plain strings, or a custom resource link's label.
-function sharedItemName(v){
-  if(typeof v === 'string') return v;
-  return v && typeof v === 'object' && typeof v.label === 'string' ? v.label : null;
-}
-function sharedItemNames(value){
-  if(Array.isArray(value)) return value.map(sharedItemName).filter(n => n !== null);
-  return value && typeof value === 'object' ? Object.keys(value) : [];
-}
-function loadSyncedNames(key){
-  try{
-    const saved = JSON.parse(localStorage.getItem('syncedNames_' + key) || 'null');
-    if(saved && currentUser && saved.userId === currentUser.id && Array.isArray(saved.names)) return new Set(saved.names);
-  }catch(e){}
-  return null;
-}
-function saveSyncedNames(key, names){
-  if(!currentUser) return;
-  try{ localStorage.setItem('syncedNames_' + key, JSON.stringify({ userId: currentUser.id, names })); }catch(e){}
-}
-// `pulling` = true when folding the cloud copy into this browser (honors
-// deletions made on either side); false when pushing (honors only this
-// browser's own deletions, so a name re-saved here is never thrown away).
-function mergeTrackedSharedData(key, cloudVal, localVal, pulling){
-  let merged;
-  if(Array.isArray(cloudVal) && Array.isArray(localVal)){
-    // Plain name lists: combine both instead of keeping whichever is longer.
-    const localItemNames = new Set(localVal.map(sharedItemName));
-    merged = [...localVal, ...cloudVal.filter(n => !localItemNames.has(sharedItemName(n)))];
-  } else {
-    merged = mergeFavoringContent(cloudVal, localVal);
-    if(merged === localVal || merged === cloudVal) return merged; // one side missing — nothing to reconcile
-  }
-  const synced = loadSyncedNames(key);
-  if(!synced) return merged;
-  const localNames = new Set(sharedItemNames(localVal));
-  const cloudNames = new Set(sharedItemNames(cloudVal));
-  const deleted = name => synced.has(name) && (!localNames.has(name) || (pulling && !cloudNames.has(name)));
-  if(Array.isArray(merged)) return merged.filter(n => !deleted(sharedItemName(n)));
-  Object.keys(merged).forEach(name => { if(deleted(name)) delete merged[name]; });
-  return merged;
-}
-function pullTrackedSharedData(key, cloudVal, localVal){
-  const synced = loadSyncedNames(key);
-  const merged = mergeTrackedSharedData(key, cloudVal, localVal, true);
-  // Only names the cloud has count as confirmed — a local-only entry that
-  // hasn't been pushed yet must never look "deleted elsewhere". A name
-  // deleted here stays listed until a push removes it from the cloud.
-  const mergedNames = new Set(sharedItemNames(merged));
-  const localNames = new Set(sharedItemNames(localVal));
-  saveSyncedNames(key, sharedItemNames(cloudVal).filter(name =>
-    mergedNames.has(name) || (synced && synced.has(name) && !localNames.has(name))));
-  return merged;
-}
-
-/* ---------------------------------------------------------------------
    Phase 2 cloud sync — the Planner (Schedule) and the shared roster
    data (ministers, minister colors, sermon series, ESV API key). Same
-   additive, fails-safe-to-local pattern as the liturgy archive: one
-   small key/value table in Supabase holds each of these as a single
-   JSON document, keyed by name. Column widths and visibility stay
-   local-only (personal, not shared).
+   fails-safe-to-local pattern as the liturgy archive: one small
+   key/value table in Supabase holds each of these as a single JSON
+   document, keyed by name, synced by SHARED_DOCS in sync.js. Column
+   widths and visibility stay local-only (personal, not shared).
 --------------------------------------------------------------------- */
-// Saves that couldn't reach the cloud, retried by the 60-second roster
-// sync — a failed read no longer falls back to a blind overwrite, so
-// without this a rarely-edited list could stay local-only.
-const pendingSharedPushes = {};
-// opts.favorCloud: an old copy (backup file) — fills in what the cloud is
-// missing but never overwrites or deletes what it has.
-async function pushSharedDataToSupabase(key, data, opts = {}){
-  if(!sbClient || !currentUser) return null;
-  // The Planner and its columns sync by baseline (see SHARED_DOCS in sync.js).
-  if(SHARED_DOCS[key] && !opts.favorCloud) return saveSharedDoc(key);
-  const tracked = DELETION_TRACKED_SHARED_KEYS.includes(key);
-  const pushedNames = tracked ? sharedItemNames(data) : null;
-  try{
-    const result = await mergeAndWriteCloudRow('shared_data', 'key', key, cloudData => {
-      if(cloudData === undefined || cloudData === null) return data;
-      if(opts.favorCloud){
-        if(Array.isArray(data) && Array.isArray(cloudData)){
-          const nameOf = v => sharedItemName(v) ?? JSON.stringify(v);
-          const cloudItemNames = new Set(cloudData.map(nameOf));
-          return [...cloudData, ...data.filter(v => !cloudItemNames.has(nameOf(v)))];
-        }
-        return mergeFavoringContent(data, cloudData);
-      }
-      if(tracked) return mergeTrackedSharedData(key, cloudData, data, false);
-      if(key === 'prayerLibrary') return mergePrayerLibraries(cloudData, data);
-      return mergeFavoringContent(cloudData, data);
-    });
-    if(pendingSharedPushes[key] === data) delete pendingSharedPushes[key];
-    if(tracked) saveSyncedNames(key, pushedNames);
-    return result.data;
-  }catch(e){
-    console.error('Could not sync "' + key + '" to the cloud; still saved locally.', e);
-    pendingSharedPushes[key] = data;
-    return null;
-  }
-}
-function retryPendingSharedPushes(){
-  Object.keys(pendingSharedPushes).forEach(key => pushSharedDataToSupabase(key, pendingSharedPushes[key]));
-  retryPendingSharedDocs();
-}
 async function pullSharedDataOnSignIn(){
   // A service opened before signing in came from this browser, not the
   // cloud — reopen it from the cloud so the next autosave can't push the
@@ -6670,47 +6564,17 @@ async function pullSharedDataOnSignIn(){
     scheduleColumns = PILLAR_DEFAULT_SCHEDULE_COLUMNS.map(c => ({ ...c }));
     saveScheduleColumns();
   }
-  if(cloud.ministerRoster){
-    ministerRoster = pullTrackedSharedData('ministerRoster', cloud.ministerRoster, ministerRoster);
-    try{ localStorage.setItem('ministerRoster', JSON.stringify(ministerRoster)); }catch(e){}
-    renderMinisterChips();
-  }
-  if(cloud.ministerColors){
-    ministerColors = pullTrackedSharedData('ministerColors', cloud.ministerColors, ministerColors);
-    try{ localStorage.setItem('ministerColors', JSON.stringify(ministerColors)); }catch(e){}
-  }
-  if(cloud.ministerEmails){
-    ministerEmails = pullTrackedSharedData('ministerEmails', cloud.ministerEmails, ministerEmails);
-    try{ localStorage.setItem('ministerEmails', JSON.stringify(ministerEmails)); }catch(e){}
-  }
-  if(cloud.prayerLibrary){
-    prayerLibrary = mergePrayerLibraries(cloud.prayerLibrary, prayerLibrary);
-    try{ localStorage.setItem('prayerLibrary', JSON.stringify(prayerLibrary)); }catch(e){}
-  }
+  ['ministerRoster', 'ministerColors', 'ministerEmails', 'prayerLibrary', 'sermonSeriesRoster', 'customLiturgicalResources', 'defaultTemplateName']
+    .forEach(key => takeInSharedDoc(key, cloud[key]));
+  renderMinisterChips();
   updateSyncStatusIndicator();
-  if(cloud.sermonSeriesRoster){
-    sermonSeriesRoster = pullTrackedSharedData('sermonSeriesRoster', cloud.sermonSeriesRoster, sermonSeriesRoster);
-    try{ localStorage.setItem('sermonSeriesRoster', JSON.stringify(sermonSeriesRoster)); }catch(e){}
-  }
-  if(cloud.liturgyTemplates){
-    liturgyTemplates = pullTrackedSharedData('liturgyTemplates', cloud.liturgyTemplates, liturgyTemplates);
-    try{ localStorage.setItem('liturgyTemplates', JSON.stringify(liturgyTemplates)); }catch(e){}
-    migrateStoredTemplates();
-  }
-  if(cloud.customLiturgicalResources){
-    saveCustomLiturgicalResources(pullTrackedSharedData('customLiturgicalResources', cloud.customLiturgicalResources, getCustomLiturgicalResources()));
-  }
-  if(cloud.churchName){
-    try{ localStorage.setItem('churchName', cloud.churchName); }catch(e){}
+  if(takeInSharedDoc('liturgyTemplates', cloud.liturgyTemplates)) migrateStoredTemplates();
+  if(takeInSharedDoc('churchName', cloud.churchName)){
     const eyebrow = document.getElementById('churchEyebrow');
-    if(eyebrow) eyebrow.innerText = cloud.churchName;
+    if(eyebrow) eyebrow.innerText = loadChurchName();
   }
   if(cloud.esvApiKey){
     try{ localStorage.setItem('esvApiKey', cloud.esvApiKey); }catch(e){}
-  }
-  if(Object.prototype.hasOwnProperty.call(cloud, 'defaultTemplateName')){
-    defaultTemplateName = cloud.defaultTemplateName || '';
-    try{ localStorage.setItem('defaultTemplateName', defaultTemplateName); }catch(e){}
   }
   if(builderIsPristine){
     // Nothing's actually been loaded into the Builder yet on this
@@ -7117,11 +6981,11 @@ function loadChurchName(){
 }
 function saveChurchName(name){
   try{ localStorage.setItem('churchName', name); }catch(e){}
-  pushSharedDataToSupabase('churchName', name);
+  saveSharedDoc('churchName');
 }
 function saveMinisterRoster(){
   try{ localStorage.setItem('ministerRoster', JSON.stringify(ministerRoster)); }catch(e){}
-  pushSharedDataToSupabase('ministerRoster', ministerRoster);
+  saveSharedDoc('ministerRoster');
 }
 let ministerColors = {};
 function loadMinisterColors(){
@@ -7133,7 +6997,7 @@ function loadMinisterColors(){
 }
 function saveMinisterColors(){
   try{ localStorage.setItem('ministerColors', JSON.stringify(ministerColors)); }catch(e){}
-  pushSharedDataToSupabase('ministerColors', ministerColors);
+  saveSharedDoc('ministerColors');
 }
 function setMinisterColor(name, hex){
   ministerColors[name] = hex;
@@ -7159,7 +7023,7 @@ function loadMinisterEmails(){
 }
 function saveMinisterEmails(){
   try{ localStorage.setItem('ministerEmails', JSON.stringify(ministerEmails)); }catch(e){}
-  pushSharedDataToSupabase('ministerEmails', ministerEmails);
+  saveSharedDoc('ministerEmails');
 }
 /* ---------------------------------------------------------------------
    Mid-session refresh for the shared roster data (minister roster,
@@ -7174,24 +7038,9 @@ function saveMinisterEmails(){
 --------------------------------------------------------------------- */
 async function syncRosterDataFromCloud(){
   if(!sbClient || !currentUser) return;
-  retryPendingSharedPushes();
+  retryPendingSharedDocs();
   const cloud = await fetchAllSharedDataFromSupabase();
-  if(cloud.ministerRoster){
-    ministerRoster = pullTrackedSharedData('ministerRoster', cloud.ministerRoster, ministerRoster);
-    try{ localStorage.setItem('ministerRoster', JSON.stringify(ministerRoster)); }catch(e){}
-  }
-  if(cloud.ministerColors){
-    ministerColors = pullTrackedSharedData('ministerColors', cloud.ministerColors, ministerColors);
-    try{ localStorage.setItem('ministerColors', JSON.stringify(ministerColors)); }catch(e){}
-  }
-  if(cloud.ministerEmails){
-    ministerEmails = pullTrackedSharedData('ministerEmails', cloud.ministerEmails, ministerEmails);
-    try{ localStorage.setItem('ministerEmails', JSON.stringify(ministerEmails)); }catch(e){}
-  }
-  if(cloud.sermonSeriesRoster){
-    sermonSeriesRoster = pullTrackedSharedData('sermonSeriesRoster', cloud.sermonSeriesRoster, sermonSeriesRoster);
-    try{ localStorage.setItem('sermonSeriesRoster', JSON.stringify(sermonSeriesRoster)); }catch(e){}
-  }
+  ['ministerRoster', 'ministerColors', 'ministerEmails', 'sermonSeriesRoster'].forEach(key => takeInSharedDoc(key, cloud[key]));
   if(document.getElementById('ministersOverlay')?.classList.contains('open')) renderMinisterChips();
 }
 setInterval(syncRosterDataFromCloud, 60000);
@@ -7641,7 +7490,7 @@ function loadSermonSeriesRoster(){
 }
 function saveSermonSeriesRoster(){
   try{ localStorage.setItem('sermonSeriesRoster', JSON.stringify(sermonSeriesRoster)); }catch(e){}
-  pushSharedDataToSupabase('sermonSeriesRoster', sermonSeriesRoster);
+  saveSharedDoc('sermonSeriesRoster');
 }
 /* ---------------------------------------------------------------------
    Full data backup — a superset of the per-liturgy Save. Bundles every
@@ -7722,14 +7571,12 @@ function restoreAllDataFromFile(file){
       const CLOUD_KEY_ALIASES = { liturgySchedule: 'schedule' };
       for(const key of BACKUP_CLOUD_SHARED_KEYS){
         if(payload.data[key] !== undefined){
-          await pushSharedDataToSupabase(CLOUD_KEY_ALIASES[key] || key, payload.data[key], { favorCloud: true });
+          await pushBackupSharedData(CLOUD_KEY_ALIASES[key] || key, payload.data[key]);
         }
       }
     }
-    // The restored lists are older than the cloud's — forget which names
-    // were confirmed synced, so names added since the backup don't look
-    // deleted here on the next sync.
-    DELETION_TRACKED_SHARED_KEYS.forEach(key => { try{ localStorage.removeItem('syncedNames_' + key); }catch(e){} });
+    // The restored copies are older than the cloud's, so they mustn't be
+    // compared against the old baselines as if they were edits.
     clearSharedCloudBases();
     alert('Restore complete — reloading the app now.');
     window.location.reload();
@@ -7837,14 +7684,14 @@ function promptAddLiturgicalResource(){
   const list = getCustomLiturgicalResources();
   list.push({ label: label.trim(), url });
   saveCustomLiturgicalResources(list);
-  pushSharedDataToSupabase('customLiturgicalResources', list);
+  saveSharedDoc('customLiturgicalResources');
   closeResourcesMenu();
 }
 function removeCustomLiturgicalResource(idx){
   const list = getCustomLiturgicalResources();
   list.splice(idx, 1);
   saveCustomLiturgicalResources(list);
-  pushSharedDataToSupabase('customLiturgicalResources', list);
+  saveSharedDoc('customLiturgicalResources');
   const trigger = document.getElementById('resourcesMenuPopover')._trigger;
   if(trigger) openResourcesMenu(trigger);
 }
@@ -8065,7 +7912,7 @@ function loadPrayerLibrary(){
 }
 function savePrayerLibraryToStorage(){
   try{ localStorage.setItem('prayerLibrary', JSON.stringify(prayerLibrary)); }catch(e){}
-  pushSharedDataToSupabase('prayerLibrary', prayerLibrary);
+  saveSharedDoc('prayerLibrary');
 }
 function prayerLibraryKey(title){
   return (title || '').trim().toLowerCase();
@@ -9172,7 +9019,7 @@ let scheduleColumns = loadScheduleColumns();
       scheduleColumns = PILLAR_DEFAULT_SCHEDULE_COLUMNS.map(c => ({ ...c }));
       scheduleColumnsHasLocalSave = true;
       localStorage.setItem('scheduleColumnsConfig', JSON.stringify(scheduleColumns));
-      pushSharedDataToSupabase('scheduleColumnsConfig', scheduleColumns);
+      saveSharedDoc('scheduleColumnsConfig');
     }
     localStorage.setItem(FLAG, '1');
   }catch(e){}

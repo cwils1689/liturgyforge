@@ -21,6 +21,15 @@ const ctx = {
   scheduleData: {},
   scheduleColumns: [],
   scheduleColumnsHasLocalSave: true,
+  ministerRoster: [],
+  ministerColors: {},
+  ministerEmails: {},
+  sermonSeriesRoster: [],
+  liturgyTemplates: {},
+  prayerLibrary: {},
+  defaultTemplateName: '',
+  loadChurchName: () => ctx.localStorage.getItem('churchName') || 'Your Church Name',
+  getCustomLiturgicalResources: () => JSON.parse(ctx.localStorage.getItem('customLiturgicalResources') || '[]'),
   currentUser: { id: 'u1', email: 'a@example.test' },
   sbClient: null,
   cloudSyncFailing: false,
@@ -35,7 +44,7 @@ const ctx = {
 vm.createContext(ctx);
 vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'sync.js'), 'utf8'), ctx);
 // Top-level let/const in a script aren't properties of the context; expose what tests use.
-vm.runInContext('globalThis.__t = { syncDiff, syncApply, syncRebase, syncNormalizeService, syncSame, ensureElementUids, mergeAndWriteCloudRow, pushLiturgyToSupabase, cloudConfirmedDates, CLOUD_WRITE_SKIP, saveSharedDoc, takeInSharedDoc, fetchAllSharedDataFromSupabase, loadSharedCloudBase, retryPendingSharedDocs }', ctx);
+vm.runInContext('globalThis.__t = { syncDiff, syncApply, syncRebase, syncNormalizeService, syncSame, ensureElementUids, mergeAndWriteCloudRow, pushLiturgyToSupabase, cloudConfirmedDates, CLOUD_WRITE_SKIP, saveSharedDoc, takeInSharedDoc, fetchAllSharedDataFromSupabase, loadSharedCloudBase, retryPendingSharedDocs, pushBackupSharedData, SHARED_DOCS }', ctx);
 const T = ctx.__t;
 
 let passed = 0, failed = 0;
@@ -416,6 +425,62 @@ function columns(){
   ctx.scheduleColumns = ctx.scheduleColumns.filter(c => c.key !== 'notes');
   await T.saveSharedDoc('scheduleColumnsConfig');
   check('columns: a removed column stays removed in the cloud', !db.shared_data.scheduleColumnsConfig.data.some(c => c.key === 'notes'));
+
+  // ---- shared lists and settings across two simulated devices ----
+  const LIST_VARS = ['ministerRoster', 'ministerColors', 'ministerEmails', 'defaultTemplateName'];
+  const people = { A: { ls: makeStorage(), vars: {} }, B: { ls: makeStorage(), vars: {} } };
+  let who = null;
+  const on = name => {
+    if(who) LIST_VARS.forEach(v => { who.vars[v] = ctx[v]; });
+    who = people[name]; ctx.localStorage = who.ls;
+    LIST_VARS.forEach(v => { ctx[v] = clone(who.vars[v] !== undefined ? who.vars[v] : (v === 'defaultTemplateName' ? '' : v === 'ministerRoster' ? [] : {})); });
+  };
+  const pullAll = async name => { on(name); const cloud = await T.fetchAllSharedDataFromSupabase(); Object.keys(T.SHARED_DOCS).forEach(k => T.takeInSharedDoc(k, cloud[k])); };
+  const row = (key, data) => { db.shared_data[key] = { data, updated_at: '2026-10-17T10:00:00.000Z' }; };
+  row('ministerRoster', ['Clint', 'Talon', 'Patrick']);
+  row('ministerColors', { Clint: '#111', Talon: '#222', Patrick: '#333' });
+  row('ministerEmails', { Clint: 'c@example.test', Talon: 't@example.test' });
+  row('churchName', 'Pillar Reformed Church');
+  row('defaultTemplateName', 'Covenant Renewal Worship');
+  row('customLiturgicalResources', [{ label: 'RCA Liturgy', url: 'https://a.test' }, { label: 'BCP', url: 'https://b.test' }]);
+  await pullAll('A'); await pullAll('B');
+  check('lists: first pull takes the cloud copies', T.syncSame(ctx.ministerRoster, ['Clint', 'Talon', 'Patrick']) && ctx.loadChurchName() === 'Pillar Reformed Church' && ctx.defaultTemplateName === 'Covenant Renewal Worship');
+
+  on('A'); ctx.ministerRoster = ctx.ministerRoster.filter(n => n !== 'Talon'); delete ctx.ministerColors.Talon; delete ctx.ministerEmails.Talon;
+  await T.saveSharedDoc('ministerRoster'); await T.saveSharedDoc('ministerColors'); await T.saveSharedDoc('ministerEmails');
+  on('B'); ctx.ministerRoster.push('Ace'); ctx.ministerColors.Ace = '#444'; ctx.ministerColors.Clint = '#999';
+  await T.saveSharedDoc('ministerRoster'); await T.saveSharedDoc('ministerColors'); await T.saveSharedDoc('ministerEmails');
+  check('lists: a removed minister stays removed while another device adds one', T.syncSame(db.shared_data.ministerRoster.data, ['Clint', 'Patrick', 'Ace']), db.shared_data.ministerRoster.data);
+  check('lists: a removed color stays removed; edits elsewhere kept', !('Talon' in db.shared_data.ministerColors.data) && db.shared_data.ministerColors.data.Ace === '#444' && db.shared_data.ministerColors.data.Clint === '#999');
+  check('lists: an unlinked email stays unlinked under a stale save', !('Talon' in db.shared_data.ministerEmails.data));
+  check('lists: the saving device takes in the removal', !ctx.ministerRoster.includes('Talon') && !('Talon' in ctx.ministerColors));
+
+  await pullAll('A');
+  check('lists: the other device takes in the additions', ctx.ministerRoster.includes('Ace') && ctx.ministerColors.Ace === '#444');
+
+  on('A'); ctx.defaultTemplateName = ''; await T.saveSharedDoc('defaultTemplateName');
+  on('B'); ctx.localStorage.setItem('churchName', 'Pillar Reformed'); await T.saveSharedDoc('churchName');
+  check('settings: clearing the default template sticks', db.shared_data.defaultTemplateName.data === '');
+  check('settings: church name saved', db.shared_data.churchName.data === 'Pillar Reformed');
+  on('B'); await T.saveSharedDoc('defaultTemplateName');
+  check("settings: a device that didn't touch the default template can't restore it", db.shared_data.defaultTemplateName.data === '');
+  await pullAll('A');
+  check('settings: the other device takes in the new church name', ctx.loadChurchName() === 'Pillar Reformed');
+
+  on('A'); let links = ctx.getCustomLiturgicalResources().filter(r => r.label !== 'BCP');
+  ctx.localStorage.setItem('customLiturgicalResources', JSON.stringify(links)); await T.saveSharedDoc('customLiturgicalResources');
+  on('B'); links = ctx.getCustomLiturgicalResources(); links.push({ label: 'ACNA', url: 'https://c.test' });
+  ctx.localStorage.setItem('customLiturgicalResources', JSON.stringify(links)); await T.saveSharedDoc('customLiturgicalResources');
+  check('resource links: a removal sticks while another device adds one', T.syncSame(db.shared_data.customLiturgicalResources.data.map(r => r.label), ['RCA Liturgy', 'ACNA']), db.shared_data.customLiturgicalResources.data);
+
+  await T.pushBackupSharedData('ministerRoster', ['Clint', 'Old Name']);
+  check('backup restore: fills in what the cloud lacks, keeps the rest', T.syncSame(db.shared_data.ministerRoster.data, ['Clint', 'Patrick', 'Ace', 'Old Name']), db.shared_data.ministerRoster.data);
+
+  const fullStorage = makeStorage(); fullStorage.setItem('sharedCloudBase_ministerRoster', JSON.stringify({ userId: 'u1', data: ['stale'] }));
+  fullStorage.setItem = () => { throw new Error('QuotaExceededError'); };
+  ctx.localStorage = fullStorage; ctx.ministerRoster = ['Clint'];
+  await T.saveSharedDoc('ministerRoster');
+  check('storage full: an outdated baseline is dropped, not kept', T.loadSharedCloudBase('ministerRoster') === null);
 
   // ---- optional replay of a real service ----
   if(process.env.LF_REPLAY_FILE){
