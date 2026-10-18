@@ -1,62 +1,55 @@
 # LiturgyForge
 
-A drag-and-drop liturgy planner for liturgical churches, built for [Pillar Reformed Church](https://www.pillarreformed.com)'s Covenant Renewal Worship and designed to be usable by other congregations too.
+A drag-and-drop liturgy planner for liturgical churches. Build each Sunday's order of worship, plan the year ahead, search your hymnal, and print or present the service from one page in your browser.
 
-**Live:** https://cwils1689.github.io/liturgyforge/
-**Status:** Phase 1 complete — usable for Pillar's own weekly planning, open for outside churches to test and evaluate.
+**Try it:** https://cwils1689.github.io/liturgyforge/
 
----
+LiturgyForge was built for the worship services at [Pillar Reformed Church](https://www.pillarreformed.com), and it's designed to fit any church that follows a set order of worship: Reformed, Anglican, Lutheran, Baptist or otherwise.
 
 ## What it does
 
-- **The Forge** — drag-and-drop liturgy elements (hymns, scripture, prayers, sermon, lectionary readings, exhortations, custom text) into a service order, with rich-text editing in place
-- **Planner** — a spreadsheet-style schedule for planning services across weeks/months, with columns for ministers, sermon series, hymn selections, and more
-- **Hymnals** — three built-in hymnal datasets you can search and insert directly into a service:
-  - Treasury of Psalms & Hymns — 1,136 songs (default)
-  - Trinity Hymnal (1990) — ~742 entries, majority-lyrics populated from public-domain 1961 sources
-  - Cantus Christi (2020) — ~744 entries (metadata; lyrics not yet loaded)
-- **Playback** — piano accompaniment via Tone.js with adjustable tempo, for previewing hymn tunes
-- **Export** — Print/PDF, Word (.docx, hand-built via JSZip/OOXML), and a full-screen Presentation Mode for use during the service
-- **Cloud sync** — Supabase-backed accounts for signed-in users; fully local-only and private for anyone browsing signed out (no real church data is exposed to guests)
+- **The Forge:** build a service by dragging elements into place, including calls to worship, hymns, Scripture readings, prayers, confessions, the sermon, the Lord's Supper and the benediction. Each element is edited in place with formatting, and services are organized into movements (for example Call, Confession, Consecration, Communion and Commission) that you can rename, reorder or add to.
+- **Templates:** start from a built-in example (Reformed, Anglican Rite II, Lutheran Divine Service, or Pillar's Covenant Renewal Worship), or save your own church's order and set it as the default for new services.
+- **Planner:** a spreadsheet-style schedule for planning weeks or months ahead: hymns, readings, preachers, sermon series and anything else you add a column for. Picking a date in the Forge fills that service in from the Planner, and edits flow back the other way. You can import an existing schedule from CSV or Excel.
+- **Lectionary and Scripture:** Revised Common Lectionary readings and collects for each Sunday, with an optional alternate lectionary. Passage text can be filled in automatically from the ESV (with your own free API key) or the KJV.
+- **Hymnals:** search three built-in hymnals by title, tune, number, topic, Scripture or lyrics, then drag a hymn into the service. Results show when each hymn was last sung, based on the Planner.
+  - Treasury of Psalms & Hymns (1,136 songs, with lyrics)
+  - Trinity Hymnal (1990), with public-domain lyrics for most entries
+  - Cantus Christi (2020), titles and details only for now
+- **Hymn playback:** hear a hymn's tune played on piano, with adjustable tempo, for hymns that have a score file.
+- **Working as a team:** pastors and staff can sign in and plan together. Each person's changes are kept when several people edit at once, and a ✏️ badge shows who is typing where. Assign ministers to parts of the service, and they see their assignments in the notifications bell.
+- **Print, Word and Presentation Mode:** print or save as PDF, export to Word (.docx), or open a full-screen, read-only view for leading the service from a tablet at the pulpit.
+- **Installable:** add it to your home screen or desktop from your browser's address bar, and it opens like an app.
 
-## Tech stack
+## Trying it at your church
 
-- Vanilla JavaScript + HTML5 (no framework), single `index.html`
-- [Sortable.js](https://sortablejs.github.io/Sortable/) for drag-and-drop
-- [Supabase](https://supabase.com/) for auth and cloud sync (chosen over Firebase for privacy)
-- [Tone.js](https://tonejs.github.io/) for hymn playback
-- [JSZip](https://stuk.github.io/jszip/) for DOCX export
-- Integrations: RCL/BCP lectionary data, ESV/KJV Bible API, hymnal metadata sourced in part from Hymnary.org
+Open the link above. You don't need an account: without signing in, everything you build stays in your own browser on that device. Nothing is sent anywhere, and you never see another church's data. Use **☰ → Backup** now and then to save a copy of your work to a file, since clearing your browser's data would erase it.
 
-## Project status
+Signing in is how a church team shares one set of services across devices and people. Accounts are set up by hand for now, and LiturgyForge currently runs one church's shared data at a time. Separate spaces for each church are planned (see below). If you'd like to use it with your team, get in touch.
 
-**Phase 1 (complete):** Core Builder + Planner functionality, two hymnals merged with searchable metadata and (partial) lyrics, guest/signed-out mode that's fully local and isolated from real church data, exports working, deployed and in active use by Pillar.
+## Status and roadmap
 
-**Currently paused for real-world testing.** The plan is to gather feedback from Pillar's own use and from other pastors trying it out before committing to the next phase.
+**Version 1.0**, in weekly use at Pillar Reformed Church. See the [changelog](CHANGELOG.md) for what's new in each release.
 
-**Phase 2 (planned, not started):** Multichurch backend — each congregation gets its own isolated account and data via Supabase, rather than the current single-church-plus-guest-mode model. New churches will be provisioned manually at first rather than through open self-serve signup, to validate the data model before building a public-facing flow.
+Planned next:
 
-## Architecture notes
+- **Accounts for more churches:** each congregation gets its own private space and team, set up by hand at first.
+- **Fuller hymnal integration.**
 
-The app is single-tenant today (Pillar Reformed Church), with a small number of isolated constants holding Pillar-specific data:
+## Privacy
 
-- `PILLAR_TEMPLATE` — Pillar's actual liturgy content, seeded once into `liturgyTemplates['Covenant Renewal Worship']` via `seedPillarTemplateOnce()`
-- `PILLAR_DEFAULT_SCHEDULE_COLUMNS` — Pillar's full 21-column Planner layout
-- `SCHEDULE_SEED_DATA` — Pillar's 2025-2026 Planner data (currently dormant/unused)
+- **No tracking.** LiturgyForge has no analytics, ads or tracking scripts.
+- **Signed out,** your services, Planner and settings are stored only in your browser.
+- **Signed in,** your church's services, Planner and shared lists are stored in a [Supabase](https://supabase.com/) database, and only signed-in accounts can read or change them. Accounts are set up by hand for each member of the team. Supabase was chosen with privacy in mind.
+- **Outside services the page contacts:** Google Fonts and public code libraries (for the page itself); Crossway's ESV API or bible-api.com, only when fetching Bible text; and the piano samples used for hymn playback. Your ESV API key is only ever sent to Crossway.
 
-Everything else — `DEFAULT_TEMPLATE`, `GENERIC_DEFAULT_SCHEDULE_COLUMNS`, `churchName` — is already generic and shared, by design, so that guest/signed-out use never exposes Pillar's real data. When multichurch support is built, the plan is to migrate these three constants into per-church seed data rather than rewrite the surrounding logic.
+## Built with
 
-## Deployment
+Plain HTML and JavaScript (no framework), [Sortable](https://sortablejs.github.io/Sortable/) for drag-and-drop, [Supabase](https://supabase.com/) for accounts and sharing, [Tone.js](https://tonejs.github.io/) for playback, and [JSZip](https://stuk.github.io/jszip/) for Word export. Lectionary data comes from the Vanderbilt Divinity Library's Revised Common Lectionary, and hymnal details come in part from [Hymnary.org](https://hymnary.org).
 
-This is a static site served via GitHub Pages from the repo root (`index.html`). To deploy an update:
+## Contact
 
-1. Download the updated file
-2. Replace `index.html` in the repo root
-3. Commit — live in about a minute
-
-## Interested in testing?
-
-If you're part of a church considering using this for your own liturgy planning, reach out — testing feedback from real use is exactly what's needed to shape the next phase. clint@pillarreformed.com 
+LiturgyForge is made by Clint Wilson, a pastor at Pillar Reformed Church. Questions, feedback, or interested in using it at your church? Email clint@pillarreformed.com.
 
 ## License
 
