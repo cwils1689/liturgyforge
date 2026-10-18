@@ -1578,6 +1578,9 @@
           <option value="cc2020">Cantus Christi (2020)</option>
         </select>
       </div>
+      <div class="panel-settings">
+        <button onclick="showAbout()">ℹ️ About</button>
+      </div>
     </div>
   </header>
 
@@ -1737,6 +1740,12 @@
     <span>You're offline — changes are only on this device and won't be saved to the cloud until you reconnect. Keep the app open until this message goes away.</span>
   </div>
 
+  <div id="updateNotice" class="backup-nudge">
+    <span>A new version of LiturgyForge is available.</span>
+    <button onclick="reloadForUpdate()">🔄 Reload now</button>
+    <button onclick="dismissUpdateNotice()">Later</button>
+  </div>
+
   <div id="liveModeOverlay" class="live-mode-overlay">
     <div class="live-mode-topbar">
       <button onclick="cycleLiveModeSize(-1)" title="Smaller text">A−</button>
@@ -1819,6 +1828,7 @@
 
   <footer class="note">
     Drag the ⠿ handle to reorder elements — within a movement, or between movements.
+    <div id="appVersion"></div>
   </footer>
 </div>
 
@@ -10888,6 +10898,61 @@ function snoozeBackupNudge(){
   try{ localStorage.setItem('backupNudgeSnooze', String(Date.now() + 7*24*60*60*1000)); }catch(e){}
   hideBackupNudge();
 }
+
+/* ---------------------------------------------------------------------
+   Version + update notice. version.json (next to index.html) holds the
+   version that's live; a tab left open (an iPad especially) keeps
+   running the code it loaded with, so it checks now and then and offers
+   a reload once a newer version is out. Bump APP_VERSION and
+   version.json together on every release (see CHANGELOG.md).
+--------------------------------------------------------------------- */
+const APP_VERSION = '0.9.0';
+document.getElementById('appVersion').textContent = 'v' + APP_VERSION;
+function customAlert(message){
+  const cancel = document.getElementById('modalCancel');
+  cancel.style.display = 'none';
+  return customConfirm(message).then(() => { cancel.style.display = ''; });
+}
+function showAbout(){
+  document.getElementById('settingsMenu').classList.remove('open');
+  customAlert(`LiturgyForge v${APP_VERSION} — © 2026 Clint Wilson`);
+}
+function isNewerVersion(a, b){
+  const pa = String(a).split('.').map(Number), pb = String(b).split('.').map(Number);
+  for(let i = 0; i < 3; i++){
+    if((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) > (pb[i] || 0);
+  }
+  return false;
+}
+let lastVersionCheckAt = 0;
+let updateNoticeDismissedAt = 0;
+async function checkForAppUpdate(){
+  if(Date.now() - lastVersionCheckAt < 5*60*1000) return;
+  lastVersionCheckAt = Date.now();
+  try{
+    const res = await fetch('version.json?t=' + Date.now(), { cache: 'no-store' });
+    if(!res.ok) return;
+    const live = await res.json();
+    if(!isNewerVersion(live.version, APP_VERSION)) return;
+    if(Date.now() - updateNoticeDismissedAt < 60*60*1000) return; // "Later" — ask again in an hour
+    document.getElementById('updateNotice').classList.add('on');
+  }catch(e){}
+}
+function dismissUpdateNotice(){
+  updateNoticeDismissedAt = Date.now();
+  document.getElementById('updateNotice').classList.remove('on');
+}
+async function reloadForUpdate(){
+  // Save first, so nothing is lost and the reload doesn't ask "Leave site?"
+  performAutosave();
+  try{ await liturgyPushChain; }catch(e){}
+  location.reload();
+}
+checkForAppUpdate();
+setInterval(checkForAppUpdate, 30*60*1000);
+document.addEventListener('visibilitychange', function(){
+  if(document.visibilityState === 'visible') checkForAppUpdate();
+});
 
 /* ---------------------------------------------------------------------
    Hymn repetition tracking — scans the Schedule for the most recent
