@@ -3,7 +3,7 @@
 Versions stay below 1.0.0 until the new sync design rolls out; that release will be 1.0.0.
 Last number for fixes, middle number for new features.
 
-## 1.1.0 — 2026-10-18
+## 1.0.1 — 2026-10-18
 
 The app loads faster: the three hymnals' song lists now live in their own files and download the first time a hymnal is opened, instead of with every page load. The page itself is about a third of its old size.
 
