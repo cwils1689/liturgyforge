@@ -80,7 +80,7 @@ A device can only ever send what its user actually changed, so a stale phone can
 
 All four recommendations were accepted: sync moves into `sync.js`; an edited element that someone else deleted comes back with the edit; today's live fixes stay live through Sunday; Stages 0–2 get built and tested today, Stages 3–5 early next week. Nothing goes live before Monday.
 
-**Added to Stage 3: Planner edit permissions.** Only certain users can edit the Planner. This has to be enforced in Supabase's access rules (row-level security on the Planner's row), not just by hiding buttons, plus a small admin list in the app. It'll be designed alongside the Planner rebuild, with Phase 2's per-church roles in mind.
+**Planner edit permissions (decided 2026-10-18):** every signed-in user can edit the Planner for now, so Stage 3 needs no change to Supabase's access rules. Church admins may come with Phase 2, and Planner editing could then be limited to them, enforced in Supabase's access rules rather than by hiding buttons.
 
 ### Original questions
 

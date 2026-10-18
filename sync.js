@@ -27,7 +27,11 @@
    (elements by uid, movements by key, sections/readings by key,
    variants by id). Lists without one — plain values like names — are
    compared by membership, or replaced whole if reordered.
-     set / unset   a field's new value, or its removal
+     set / unset   a field's new value, or its removal. A new object
+                   (`fresh`: nothing there in the baseline, like a
+                   Planner row) merges into one someone else added at
+                   the same spot; a removed object (`was` = it, as of
+                   the baseline) stays if it was changed elsewhere.
      members       names added to / removed from a plain list
      insert        a new list item, placed after the item before it here
      remove        a list item deleted here (`was` = it, as of the baseline)
@@ -91,7 +95,8 @@ function syncDiff(base, local, path = [], ops = []){
       }
     }
   }
-  ops.push(local === undefined ? { op: 'unset', path } : { op: 'set', path, value: syncClone(local) });
+  if(local === undefined) ops.push(syncIsPlainObject(base) ? { op: 'unset', path, was: syncClone(base) } : { op: 'unset', path });
+  else ops.push(base == null && syncIsPlainObject(local) ? { op: 'set', path, value: syncClone(local), fresh: true } : { op: 'set', path, value: syncClone(local) });
   return ops;
 }
 
@@ -149,8 +154,12 @@ function syncApplyOp(doc, op, local){
     const parent = syncResolve(doc, op.path.slice(0, -1), local);
     const key = op.path[op.path.length - 1];
     if(!parent || typeof key !== 'string') return;
-    if(op.op === 'set') parent[key] = syncClone(op.value);
-    else delete parent[key];
+    if(op.op === 'set'){
+      if(op.fresh && syncIsPlainObject(parent[key])) Object.assign(parent[key], syncClone(op.value));
+      else parent[key] = syncClone(op.value);
+    } else if(op.was === undefined || parent[key] === undefined || syncSame(parent[key], op.was)){
+      delete parent[key];
+    }
     return;
   }
   const list = syncResolve(doc, op.path, local);
@@ -783,3 +792,145 @@ function scheduleQuickAutosave(){
 document.addEventListener('visibilitychange', function(){
   performAutosave();
 });
+
+/* =====================================================================
+   Shared documents — rows of the shared_data table that every device
+   edits: the Planner and its column layout. Same model as services, with
+   the baseline kept in localStorage (per account) so it survives a
+   reload. Each entry says how to read and replace this browser's copy,
+   and how to merge when there's no baseline yet (the first sync on a
+   browser, or after a backup restore).
+   ===================================================================== */
+const SHARED_DOCS = {
+  // The Planner: { 'YYYY-MM-DD': { columnKey: value, … } }. Each cell is
+  // its own change, so two people editing different cells — even in the
+  // same row — both keep theirs.
+  schedule: {
+    get: () => scheduleData,
+    set: v => {
+      scheduleData = v;
+      try{ localStorage.setItem('liturgySchedule', JSON.stringify(v)); }catch(e){}
+    },
+    mergeWithoutBase: mergeScheduleWithoutBase,
+    takeInWithoutBase: mergeScheduleWithoutBase,
+  },
+  // Planner columns, identified by key: adding, removing, renaming and
+  // reordering columns are each a change.
+  scheduleColumnsConfig: {
+    get: () => scheduleColumns,
+    set: v => {
+      scheduleColumns = v;
+      scheduleColumnsHasLocalSave = true;
+      try{ localStorage.setItem('scheduleColumnsConfig', JSON.stringify(v)); }catch(e){}
+    },
+    mergeWithoutBase: (cloud, local) => mergeFavoringContent(cloud, local),
+    // A browser still on a seed layout takes the cloud's as-is; one with
+    // its own saved layout keeps it unless the cloud's is at least as big.
+    takeInWithoutBase: (cloud, local) => (!scheduleColumnsHasLocalSave || cloud.length >= local.length) ? cloud : local,
+  },
+};
+// Without a baseline: cell by cell, whichever side has content.
+function mergeScheduleWithoutBase(cloud, local){
+  cloud = cloud || {};
+  local = local || {};
+  const merged = {};
+  new Set([...Object.keys(cloud), ...Object.keys(local)]).forEach(d => { merged[d] = mergeFavoringContent(cloud[d], local[d]); });
+  return merged;
+}
+function loadSharedCloudBase(key){
+  if(!currentUser) return null;
+  try{
+    const saved = JSON.parse(localStorage.getItem('sharedCloudBase_' + key));
+    if(saved && saved.userId === currentUser.id) return saved.data;
+    // The column layout's baseline from before this model, kept so the
+    // first sync after updating doesn't need the fallback.
+    if(key === 'scheduleColumnsConfig'){
+      const old = localStorage.getItem('scheduleColumnsCloudBase');
+      if(old) return JSON.parse(old);
+    }
+  }catch(e){}
+  return null;
+}
+function saveSharedCloudBase(key, data){
+  if(!currentUser) return;
+  try{ localStorage.setItem('sharedCloudBase_' + key, JSON.stringify({ userId: currentUser.id, data })); }catch(e){}
+}
+// After a backup restore: this browser's copies are older than the cloud,
+// so differences from the old baselines aren't edits made here.
+function clearSharedCloudBases(){
+  Object.keys(SHARED_DOCS).forEach(key => { try{ localStorage.removeItem('sharedCloudBase_' + key); }catch(e){} });
+  try{ localStorage.removeItem('scheduleColumnsCloudBase'); }catch(e){}
+}
+// Saves are chained per row, so each one diffs against the baseline the
+// one before it left. A save that fails is retried by the roster sync.
+const sharedDocChains = {};
+const sharedDocsPending = new Set();
+const sharedDocsSaving = {};
+const sharedDocLastWriteSeq = {};
+let sharedDocWriteSeq = 0;
+let sharedFetchSeq = 0;
+function saveSharedDoc(key){
+  if(!sbClient || !currentUser) return Promise.resolve(null);
+  const doc = SHARED_DOCS[key];
+  const sent = syncClone(doc.get());
+  sharedDocsSaving[key] = (sharedDocsSaving[key] || 0) + 1;
+  const run = (sharedDocChains[key] || Promise.resolve()).then(async () => {
+    try{
+      const base = loadSharedCloudBase(key);
+      const result = await mergeAndWriteCloudRow('shared_data', 'key', key, cloud => {
+        if(cloud === undefined || cloud === null) return sent;
+        return base === null ? doc.mergeWithoutBase(cloud, sent) : syncApply(cloud, syncDiff(base, sent), sent);
+      });
+      sharedDocsPending.delete(key);
+      sharedDocLastWriteSeq[key] = ++sharedDocWriteSeq;
+      saveSharedCloudBase(key, result.data);
+      // Take in what other devices saved, keeping anything edited here
+      // while this save was on its way. No re-render — it may be mid-edit.
+      const next = syncRebase(result.data, doc.get(), sent);
+      if(!syncSame(next, doc.get())) doc.set(next);
+      return result.data;
+    }catch(e){
+      console.error('Could not sync "' + key + '" to the cloud; still saved locally.', e);
+      sharedDocsPending.add(key);
+      return null;
+    }finally{
+      sharedDocsSaving[key]--;
+    }
+  });
+  sharedDocChains[key] = run;
+  return run;
+}
+function retryPendingSharedDocs(){
+  sharedDocsPending.forEach(key => saveSharedDoc(key));
+}
+// A teammate's copy, fetched by fetchAllSharedDataFromSupabase: replay
+// this browser's unsaved changes on top and make it the new baseline.
+// Skipped while a save is on its way or if one finished after the fetch
+// started — the save already took in a copy at least as new.
+function takeInSharedDoc(key, cloud){
+  if(cloud === undefined || cloud === null) return false;
+  if(sharedDocsSaving[key] || (sharedDocLastWriteSeq[key] || 0) > sharedFetchSeq) return false;
+  const doc = SHARED_DOCS[key];
+  const base = loadSharedCloudBase(key);
+  const local = doc.get();
+  const next = base === null ? doc.takeInWithoutBase(cloud, local) : syncRebase(cloud, local, base);
+  saveSharedCloudBase(key, cloud);
+  if(syncSame(next, local)) return false;
+  doc.set(next);
+  return true;
+}
+async function fetchAllSharedDataFromSupabase(){
+  if(!sbClient || !currentUser) return {};
+  const seqAtStart = sharedDocWriteSeq;
+  try{
+    const { data, error } = await sbClient.from('shared_data').select('key, data');
+    if(error || !data) return {};
+    const result = {};
+    data.forEach(row => { result[row.key] = row.data; });
+    sharedFetchSeq = seqAtStart;
+    return result;
+  }catch(e){
+    console.error('Could not fetch shared data from the cloud; using local copies.', e);
+    return {};
+  }
+}

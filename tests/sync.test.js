@@ -7,12 +7,20 @@ const vm = require('vm');
 
 // ---- load sync.js with just enough of the browser around it ----
 const noop = () => {};
+// One browser's localStorage. Tests swap these to act as different devices.
+function makeStorage(){
+  const m = new Map();
+  return { getItem: k => m.has(k) ? m.get(k) : null, setItem: (k, v) => m.set(k, String(v)), removeItem: k => m.delete(k) };
+}
 const ctx = {
   console, setTimeout, clearTimeout, Date, Math, JSON, Promise, Set, Map,
   setInterval: noop,
   document: { addEventListener: noop, getElementById: () => null, activeElement: null, hidden: false },
   window: { addEventListener: noop },
-  localStorage: { getItem: () => null, setItem: noop, removeItem: noop },
+  localStorage: makeStorage(),
+  scheduleData: {},
+  scheduleColumns: [],
+  scheduleColumnsHasLocalSave: true,
   currentUser: { id: 'u1', email: 'a@example.test' },
   sbClient: null,
   cloudSyncFailing: false,
@@ -27,7 +35,7 @@ const ctx = {
 vm.createContext(ctx);
 vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'sync.js'), 'utf8'), ctx);
 // Top-level let/const in a script aren't properties of the context; expose what tests use.
-vm.runInContext('globalThis.__t = { syncDiff, syncApply, syncRebase, syncNormalizeService, syncSame, ensureElementUids, mergeAndWriteCloudRow, pushLiturgyToSupabase, cloudConfirmedDates, CLOUD_WRITE_SKIP }', ctx);
+vm.runInContext('globalThis.__t = { syncDiff, syncApply, syncRebase, syncNormalizeService, syncSame, ensureElementUids, mergeAndWriteCloudRow, pushLiturgyToSupabase, cloudConfirmedDates, CLOUD_WRITE_SKIP, saveSharedDoc, takeInSharedDoc, fetchAllSharedDataFromSupabase, loadSharedCloudBase, retryPendingSharedDocs }', ctx);
 const T = ctx.__t;
 
 let passed = 0, failed = 0;
@@ -194,21 +202,129 @@ function twoSaves(base, editA, editB){
   check('300 random two-device rounds: nothing lost, duplicated or resurrected', problems === 0, { problems });
 }
 
+// ---- the Planner: rows keyed by date, a cell per column ----
+function planner(){
+  return {
+    '2026-10-18': { scripture: 'Ps 100', hymn1: '143', preacher: 'Clint', notes: 'Communion' },
+    '2026-10-25': { scripture: 'Ps 23', hymn1: '', preacher: 'Talon' },
+    '2026-11-01': { scripture: 'Ps 1', hymn1: '200', preacher: 'Clint' },
+  };
+}
+function columns(){
+  return [
+    { key: 'scripture', label: 'Scripture', kind: 'scripture' },
+    { key: 'hymn1', label: 'Opening Hymn', kind: 'hymn' },
+    { key: 'preacher', label: 'Preacher', kind: 'minister' },
+    { key: 'notes', label: 'Notes', kind: 'text' },
+  ];
+}
+{
+  const base = planner();
+  const edits = {
+    'edit a cell': p => { p['2026-10-18'].hymn1 = '300'; },
+    'clear a cell': p => { p['2026-10-18'].notes = ''; },
+    'add a date': p => { p['2026-11-08'] = {}; },
+    'add a date with cells': p => { p['2026-11-08'] = { preacher: 'Ace' }; },
+    'remove a date': p => { delete p['2026-10-25']; },
+    'move a date': p => { p['2026-10-26'] = p['2026-10-25']; delete p['2026-10-25']; },
+  };
+  for(const [name, edit] of Object.entries(edits)){
+    const local = clone(base); edit(local);
+    check('planner round trip: ' + name, T.syncSame(T.syncApply(base, T.syncDiff(base, local), local), local));
+  }
+
+  let r = twoSaves(base, p => { p['2026-10-18'].hymn1 = 'A'; }, p => { p['2026-10-18'].preacher = 'B'; });
+  check('planner: different cells, same date: both kept', r['2026-10-18'].hymn1 === 'A' && r['2026-10-18'].preacher === 'B');
+
+  r = twoSaves(base, p => { p['2026-10-18'].hymn1 = 'A'; }, p => { p['2026-10-18'].hymn1 = 'B'; });
+  check('planner: same cell: later save wins', r['2026-10-18'].hymn1 === 'B');
+
+  r = twoSaves(base, p => { p['2026-10-18'].notes = ''; }, p => { p['2026-11-01'].hymn1 = 'B'; });
+  check('planner: a cleared cell stays cleared under a stale copy', r['2026-10-18'].notes === '' && r['2026-11-01'].hymn1 === 'B');
+
+  r = twoSaves(base, p => { p['2026-11-08'] = { preacher: 'A' }; }, p => { p['2026-11-08'] = { hymn1: 'B' }; });
+  check('planner: both add the same date: both cells kept', r['2026-11-08'] && r['2026-11-08'].preacher === 'A' && r['2026-11-08'].hymn1 === 'B', r['2026-11-08']);
+
+  r = twoSaves(base, p => { delete p['2026-10-25']; }, p => { p['2026-10-25'].hymn1 = 'B'; });
+  check('planner: date removed by A, edited by B (after): comes back with the edit', r['2026-10-25'] && r['2026-10-25'].hymn1 === 'B');
+
+  r = twoSaves(base, p => { p['2026-10-25'].hymn1 = 'A'; }, p => { delete p['2026-10-25']; });
+  check("planner: date edited by A, removed by B (after): A's edit kept", r['2026-10-25'] && r['2026-10-25'].hymn1 === 'A');
+
+  r = twoSaves(base, p => { delete p['2026-10-25']; }, p => { p['2026-11-01'].notes = 'B'; });
+  check('planner: date removed, untouched elsewhere: stays removed', !('2026-10-25' in r) && r['2026-11-01'].notes === 'B');
+
+  const cb = columns();
+  const colEdits = {
+    'add a column': c => { c.splice(2, 0, { key: 'hymn2', label: 'Hymn 2', kind: 'hymn' }); },
+    'remove a column': c => { c.splice(3, 1); },
+    'rename a column': c => { c[0].label = 'Reading'; },
+    'reorder columns': c => { [c[1], c[2]] = [c[2], c[1]]; },
+  };
+  for(const [name, edit] of Object.entries(colEdits)){
+    const local = clone(cb); edit(local);
+    check('columns round trip: ' + name, T.syncSame(T.syncApply(cb, T.syncDiff(cb, local), local), local));
+  }
+  r = twoSaves(cb, c => { c.splice(3, 1); }, c => { c[0].label = 'Reading'; });
+  check('columns: removed by A, another renamed by B: removal sticks', r.length === 3 && !r.some(c => c.key === 'notes') && r[0].label === 'Reading');
+  r = twoSaves(cb, c => { c.push({ key: 'a', label: 'A', kind: 'text' }); }, c => { c.push({ key: 'b', label: 'B', kind: 'text' }); });
+  check('columns: added on both sides: both kept', r.some(c => c.key === 'a') && r.some(c => c.key === 'b'));
+}
+
+// ---- randomized: two devices editing the same Planner ----
+{
+  let seed = 11;
+  const rand = n => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
+  const fields = ['scripture', 'hymn1', 'preacher', 'notes'];
+  let problems = 0;
+  for(let round = 0; round < 300; round++){
+    const base = planner();
+    const A = clone(base), B = clone(base);
+    const set = { A: new Map(), B: new Map() }, removed = { A: new Set(), B: new Set() }, added = { A: new Set(), B: new Set() };
+    for(const [who, doc] of [['A', A], ['B', B]]){
+      for(let k = 0; k < 1 + rand(4); k++){
+        const dates = Object.keys(doc);
+        const action = rand(3);
+        if(action === 0 && dates.length){
+          const d = dates[rand(dates.length)], f = fields[rand(fields.length)];
+          doc[d][f] = who + round + '-' + k; set[who].set(d + '|' + f, doc[d][f]);
+        } else if(action === 1){
+          const d = '2027-0' + (1 + rand(9)) + '-0' + (1 + rand(9));
+          if(!doc[d]){ doc[d] = { notes: who + round }; added[who].add(d); }
+        } else if(dates.length){
+          const d = dates[rand(dates.length)];
+          if(![...set[who].keys()].some(x => x.startsWith(d + '|')) && !added[who].has(d)){ delete doc[d]; removed[who].add(d); }
+        }
+      }
+    }
+    const final = T.syncRebase(T.syncRebase(base, A, base), B, base);
+    const editedBy = (who, d) => [...set[who].keys()].some(x => x.startsWith(d + '|')) || added[who].has(d);
+    for(const [key, val] of set.B){ const [d, f] = key.split('|'); if(!final[d] || final[d][f] !== val) problems++; }                    // B's cells survive
+    for(const [key, val] of set.A){ const [d, f] = key.split('|'); if(!set.B.has(key) && (!final[d] || final[d][f] !== val)) problems++; } // A's cells survive
+    for(const d of removed.A) if(!editedBy('B', d) && final[d]) problems++;   // A's removals stick
+    for(const d of removed.B) if(!editedBy('A', d) && final[d]) problems++;   // B's removals stick
+    for(const who of ['A', 'B']) for(const d of added[who]) if(!final[d]) problems++; // additions kept
+  }
+  check('300 random two-device Planner rounds: nothing lost or resurrected', problems === 0, { problems });
+}
+
 // ---- conditional writes against a simulated Supabase ----
 (async () => {
-  const db = { liturgies: {} }; let hook = null; let failRead = false; let clock = Date.parse('2026-10-18T00:00:00Z');
+  const db = { liturgies: {}, shared_data: {} }; let hook = null; let failRead = false; let clock = Date.parse('2026-10-18T00:00:00Z');
   const tick = () => new Promise(r => setTimeout(r, 1));
   ctx.sbClient = { from(table){
     const q = { f: [], op: 'select' };
     const run = async () => {
-      await tick(); const rows = db[table]; const key = (q.f.find(x => x[0] === 'service_date') || [])[2];
+      await tick(); const rows = db[table]; const keyCol = table === 'liturgies' ? 'service_date' : 'key';
+      const key = (q.f.find(x => x[0] === keyCol) || [])[2];
       if(q.op === 'select'){
         if(failRead) return { data: null, error: { message: 'read failed' } };
+        if(key === undefined) return { data: Object.entries(rows).map(([k, r]) => ({ key: k, data: clone(r.data) })), error: null };
         const r = rows[key]; const out = r ? { data: clone(r.data), updated_at: r.updated_at } : null;
         if(hook) await hook(key);
         return { data: out, error: null };
       }
-      if(q.op === 'insert'){ if(rows[q.v.service_date]) return { error: { code: '23505' } }; rows[q.v.service_date] = { data: q.v.data, updated_at: new Date(clock++).toISOString() }; return { error: null }; }
+      if(q.op === 'insert'){ if(rows[q.v[keyCol]]) return { error: { code: '23505' } }; rows[q.v[keyCol]] = { data: q.v.data, updated_at: new Date(clock++).toISOString() }; return { error: null }; }
       const r = rows[key]; const ts = q.f.find(x => x[0] === 'updated_at');
       if(!r || (ts && Date.parse(ts[2]) !== Date.parse(r.updated_at))) return { data: [], error: null };
       r.data = q.v.data; r.updated_at = new Date(clock++).toISOString(); return { data: [{}], error: null };
@@ -237,9 +353,69 @@ function twoSaves(base, editA, editB){
   console.error = origError; failRead = false;
   check('failed read: nothing written', res === null && JSON.stringify(db.liturgies[D]) === before);
 
+  // The "put it back?" prompt is left unanswered — answering runs page code.
+  let asked = false;
+  ctx.formatServiceDateLabel = d => d;
+  ctx.customConfirm = () => { asked = true; return new Promise(noop); };
   T.cloudConfirmedDates.add('2026-10-25');
   await T.pushLiturgyToSupabase('2026-10-25', service(), base, { live: true });
-  check('deleted elsewhere: not recreated', !db.liturgies['2026-10-25']);
+  check('deleted elsewhere: not recreated, and asked about', !db.liturgies['2026-10-25'] && asked);
+
+  // ---- the Planner across two simulated devices ----
+  // Each device is its own localStorage plus its own copy of the Planner.
+  const devices = { A: { ls: makeStorage(), data: {} }, B: { ls: makeStorage(), data: {} } };
+  let current = null;
+  const as = who => { if(current) current.data = ctx.scheduleData; current = devices[who]; ctx.localStorage = current.ls; ctx.scheduleData = current.data; };
+  const pullOn = async who => { as(who); const cloud = await T.fetchAllSharedDataFromSupabase(); return T.takeInSharedDoc('schedule', cloud.schedule); };
+  db.shared_data.schedule = { data: planner(), updated_at: '2026-10-17T10:00:00.000Z' };
+  await pullOn('A'); await pullOn('B');
+  check('planner: first pull with no baseline takes the cloud copy', T.syncSame(ctx.scheduleData, planner()));
+
+  as('A'); ctx.scheduleData['2026-10-18'].hymn1 = 'A hymn'; await T.saveSharedDoc('schedule');
+  as('B'); ctx.scheduleData['2026-10-18'].preacher = 'B preacher'; await T.saveSharedDoc('schedule');
+  let cloudP = db.shared_data.schedule.data;
+  check("planner saves: both devices' cells land", cloudP['2026-10-18'].hymn1 === 'A hymn' && cloudP['2026-10-18'].preacher === 'B preacher', cloudP['2026-10-18']);
+  check("planner saves: the later device takes in the earlier one's edit", ctx.scheduleData['2026-10-18'].hymn1 === 'A hymn');
+
+  as('A'); delete ctx.scheduleData['2026-10-25']; await T.saveSharedDoc('schedule');
+  as('B'); ctx.scheduleData['2026-11-01'].notes = 'B note'; await T.saveSharedDoc('schedule');
+  cloudP = db.shared_data.schedule.data;
+  check("planner saves: a stale device can't bring back a removed date", !('2026-10-25' in cloudP) && cloudP['2026-11-01'].notes === 'B note');
+
+  as('A'); ctx.scheduleData['2026-11-01'].scripture = 'A unsaved';
+  await pullOn('A');
+  check("planner pull: keeps this device's unsaved edit and takes in the teammate's", ctx.scheduleData['2026-11-01'].scripture === 'A unsaved' && ctx.scheduleData['2026-11-01'].notes === 'B note');
+  await T.saveSharedDoc('schedule');
+  check('planner: the unsaved edit is sent on the next save', db.shared_data.schedule.data['2026-11-01'].scripture === 'A unsaved');
+
+  // A fetch that started before a save finished mustn't roll the save back.
+  as('B');
+  const staleFetch = T.fetchAllSharedDataFromSupabase();
+  ctx.scheduleData['2026-10-18'].notes = 'B newer'; const savedB = T.saveSharedDoc('schedule');
+  const stale = await staleFetch; await savedB;
+  T.takeInSharedDoc('schedule', stale.schedule);
+  check('planner: a fetch older than a save is ignored', ctx.scheduleData['2026-10-18'].notes === 'B newer');
+
+  check('planner: baseline survives a reload', T.syncSame(T.loadSharedCloudBase('schedule'), db.shared_data.schedule.data));
+  ctx.currentUser = { id: 'u2', email: 'b@example.test' };
+  check("planner: another account doesn't use this baseline", T.loadSharedCloudBase('schedule') === null);
+  ctx.currentUser = { id: 'u1', email: 'a@example.test' };
+
+  failRead = true; console.error = noop;
+  ctx.scheduleData['2026-11-01'].hymn1 = 'while offline';
+  const offline = await T.saveSharedDoc('schedule');
+  console.error = origError; failRead = false;
+  check('planner: a failed save writes nothing', offline === null && db.shared_data.schedule.data['2026-11-01'].hymn1 !== 'while offline');
+  T.retryPendingSharedDocs(); await T.saveSharedDoc('schedule');
+  check('planner: the retry sends it', db.shared_data.schedule.data['2026-11-01'].hymn1 === 'while offline');
+
+  // Columns: a deleted column used to come back through the merge.
+  ctx.scheduleColumns = columns();
+  db.shared_data.scheduleColumnsConfig = { data: columns(), updated_at: '2026-10-17T10:00:00.000Z' };
+  T.takeInSharedDoc('scheduleColumnsConfig', columns());
+  ctx.scheduleColumns = ctx.scheduleColumns.filter(c => c.key !== 'notes');
+  await T.saveSharedDoc('scheduleColumnsConfig');
+  check('columns: a removed column stays removed in the cloud', !db.shared_data.scheduleColumnsConfig.data.some(c => c.key === 'notes'));
 
   // ---- optional replay of a real service ----
   if(process.env.LF_REPLAY_FILE){
