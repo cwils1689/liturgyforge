@@ -3,7 +3,7 @@
 Versions stay below 1.0.0 until the new sync design rolls out; that release will be 1.0.0.
 Last number for fixes, middle number for new features.
 
-## 1.0.0 — 2026-10-19
+## 1.0.0 — 2026-10-18
 
 A new way of saving to the cloud: each device sends only what its user changed, so a phone or tablet left open on an old copy can't overwrite anyone else's work. This covers services, the Planner and its columns, and the shared lists and settings.
 
