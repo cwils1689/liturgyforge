@@ -3,6 +3,18 @@
 Versions stay below 1.0.0 until the new sync design rolls out; that release will be 1.0.0.
 Last number for fixes, middle number for new features.
 
+## 1.0.0 — 2026-10-19
+
+A new way of saving to the cloud: each device sends only what its user changed, so a phone or tablet left open on an old copy can't overwrite anyone else's work. This covers services, the Planner and its columns, and the shared lists and settings.
+
+- When two people edit at once, both people's changes are kept, even in the same element or Planner row. If both change the same box, the later save wins.
+- Clearing or deleting something sticks on every device: a Planner cell or date, a column, a minister, a color or login link, a sermon series, a template, a resource link, or the default template.
+- If someone edits something another person deleted, it comes back with the edit instead of the edit being lost.
+- While someone is typing in an element, others with that service open see a ✏️ badge with their name on it.
+- An update that only changed the service title now shows up on other devices.
+- In Firefox, reloading no longer leaves the app acting as if a service is open while the header says "Select a Service".
+- The update notice now also checks when you click back into the installed desktop app.
+
 ## 0.9.1 — 2026-10-17
 
 - Closing or leaving the app no longer warns about unsaved changes when nothing was edited. This happened after opening a service from the cloud and leaving it unedited.

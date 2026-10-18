@@ -5373,9 +5373,9 @@ function resetTemplate(){
    own liturgy: this is what lets someone build out a structure once (or
    several variants — e.g. a normal Sunday vs. a Communion-less service)
    and reapply it to a fresh date without starting from scratch or
-   re-picking the default every time. Stored the same additive,
-   fails-safe-to-local way as the minister roster: local storage always,
-   Supabase shared_data (key 'liturgyTemplates') when signed in.
+   re-picking the default every time. Stored the same fails-safe-to-
+   local way as the minister roster: local storage always, Supabase
+   shared_data (key 'liturgyTemplates') when signed in.
 --------------------------------------------------------------------- */
 let liturgyTemplates = {};
 function loadLiturgyTemplates(){
@@ -5399,7 +5399,7 @@ function saveLiturgyTemplatesToStorage(){
    Default (e.g. Pillar's Covenant Renewal Worship) gets dropped into
    an unfamiliar skeleton on a brand-new device the first time they
    sign in there — the actual bug report that prompted this feature.
-   Synced the same additive way as everything else here: local always,
+   Synced the same way as everything else here: local always,
    Supabase 'shared_data' (key 'defaultTemplateName') when signed in.
    Empty string means "use the built-in DEFAULT_TEMPLATE" — pushed to
    the cloud like any other value, so explicitly clearing it on one
@@ -6961,7 +6961,7 @@ function loadMinisterRoster(){
    Church name (the small eyebrow line above the service title) — a
    single app-wide setting, not per-service, so it's stored once and
    loaded at init rather than saved into every liturgy snapshot. Synced
-   the same additive way as the other shared_data settings.
+   the same way as the other shared_data settings (SHARED_DOCS).
 --------------------------------------------------------------------- */
 function loadChurchName(){
   try{
@@ -10099,7 +10099,7 @@ function snoozeBackupNudge(){
    a reload once a newer version is out. Bump APP_VERSION and
    version.json together on every release (see CHANGELOG.md).
 --------------------------------------------------------------------- */
-const APP_VERSION = '0.9.1';
+const APP_VERSION = '1.0.0';
 document.getElementById('appVersion').textContent = 'v' + APP_VERSION;
 function customAlert(message){
   const cancel = document.getElementById('modalCancel');
@@ -10146,6 +10146,8 @@ setInterval(checkForAppUpdate, 30*60*1000);
 document.addEventListener('visibilitychange', function(){
   if(document.visibilityState === 'visible') checkForAppUpdate();
 });
+// An installed desktop app clicked back into doesn't fire visibilitychange.
+window.addEventListener('focus', checkForAppUpdate);
 
 /* ---------------------------------------------------------------------
    Hymn repetition tracking — scans the Schedule for the most recent
