@@ -6614,34 +6614,68 @@ function mergeObjectArrayByIdentity(cloudArr, localArr, baseArr){
     return Math.min(Math.max(c, l), Math.max(Math.min(c, l), c + l - b));
   };
   const consumed = new Map();
-  const result = [];
-  cloudArr.forEach(cItem => {
+  // Each kept item, with its position on the cloud side (ci) and local
+  // side (li), -1 where that side doesn't have it — used to order the
+  // result below.
+  const entries = [];
+  cloudArr.forEach((cItem, ci) => {
     const sig = sigOf(cItem, 0);
-    if(sig === null){ result.push(cItem); return; }
+    if(sig === null){ entries.push({ item: cItem, ci, li: -1 }); return; }
     const bucket = localBySig.get(sig);
     const idx = consumed.get(sig) || 0;
     if(idx >= keepCount(sig)) return; // deleted on one side since the base
     const baseBucket = baseBySig ? baseBySig.get(sig) : null;
     if(bucket && idx < bucket.length){
-      result.push(mergeFavoringContent(cItem, bucket[idx], baseBucket ? baseBucket[idx] : undefined));
+      entries.push({ item: mergeFavoringContent(cItem, bucket[idx], baseBucket ? baseBucket[idx] : undefined), ci, li: localArr.indexOf(bucket[idx]) });
     } else {
       // No local counterpart (this device hasn't seen it, or it's a
       // teammate's addition) — keep it rather than drop it.
-      result.push(cItem);
+      entries.push({ item: cItem, ci, li: -1 });
     }
     consumed.set(sig, idx + 1);
   });
   // Anything on the local side left unmatched — new local elements the
   // cloud copy doesn't know about yet, plus anything with no identity
   // signature at all (always kept, since it can't be safely paired).
-  localArr.forEach(item => {
+  localArr.forEach((item, li) => {
     const sig = sigOf(item, 1);
-    if(sig === null){ result.push(item); return; }
+    if(sig === null){ entries.push({ item, ci: -1, li }); return; }
     const bucket = localBySig.get(sig);
     const idx = consumed.get(sig) || 0;
-    if(idx < bucket.length && idx < keepCount(sig)){ result.push(bucket[idx]); consumed.set(sig, idx + 1); }
+    if(idx < bucket.length && idx < keepCount(sig)){ entries.push({ item: bucket[idx], ci: -1, li: localArr.indexOf(bucket[idx]) }); consumed.set(sig, idx + 1); }
   });
-  return result;
+  // Order: the result used to always follow the cloud side, so moving an
+  // element never saved — the cloud's old order came straight back. Now
+  // it follows the local side (the side that wins conflicts) unless only
+  // the cloud side has been rearranged since the base (a teammate moved
+  // things and this side didn't). Items only the other side has go right
+  // after the item they followed there.
+  const reorderedSinceBase = (arr, side) => {
+    if(!baseBySig) return false;
+    const seen = new Map();
+    let last = -1;
+    for(const item of arr){
+      const sig = sigOf(item, side);
+      if(sig === null) continue;
+      const n = seen.get(sig) || 0;
+      seen.set(sig, n + 1);
+      const baseItem = (baseBySig.get(sig) || [])[n];
+      if(!baseItem) continue;
+      const pos = baseArr.indexOf(baseItem);
+      if(pos < last) return true;
+      last = pos;
+    }
+    return false;
+  };
+  const followCloud = reorderedSinceBase(cloudArr, 0) && !reorderedSinceBase(localArr, 1);
+  const primary = followCloud ? 'ci' : 'li', other = followCloud ? 'li' : 'ci';
+  const ordered = entries.filter(e => e[primary] >= 0).sort((a, b) => a[primary] - b[primary]);
+  entries.filter(e => e[primary] < 0).forEach(e => {
+    let at = 0, prev = -1;
+    ordered.forEach((o, i) => { if(o[other] > prev && o[other] < e[other]){ prev = o[other]; at = i + 1; } });
+    ordered.splice(at, 0, e);
+  });
+  return ordered.map(e => e.item);
 }
 function mergeFavoringContent(cloudVal, localVal, baseVal){
   if(localVal === undefined || localVal === null) return cloudVal;
