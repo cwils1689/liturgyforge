@@ -1894,9 +1894,9 @@ function getMovementIcon(movement){
 }
 
 /* ---------------------------------------------------------------------
-   DEFAULT_TEMPLATE — revised 2026-08-06 (v3): now built from the
-   "Baptist Default" export, which is also the app's actual default
-   (no separate named "Baptist Default" template is seeded — a fresh
+   DEFAULT_TEMPLATE — the "Baptist Default" liturgy, which is the
+   app's actual default (no separate named "Baptist Default" template
+   is seeded — a fresh
    Builder already *is* this, and Templates ▾ → Reset to Default
    Template gets back to it, so a duplicate entry in the list would
    just be noise).
@@ -2145,8 +2145,7 @@ const DEFAULT_TEMPLATE = [
    first-time visitor (e.g. a pastor friend trying the app) sees the
    Baptist Default skeleton instead of Pillar's specific service text.
    Pillar's full liturgy is one click away via Templates ▾ → "Covenant
-   Renewal Worship". Revised 2026-08-06 alongside the other named
-   templates.
+   Renewal Worship".
 --------------------------------------------------------------------- */
 const PILLAR_TEMPLATE = [
   {
@@ -2599,7 +2598,7 @@ const PILLAR_TEMPLATE = [
 ];
 
 /* ---------------------------------------------------------------------
-   GENERIC DENOMINATIONAL TEMPLATES — revised 2026-08-06. Three named
+   GENERIC DENOMINATIONAL TEMPLATES. Three named
    templates, seeded once per browser via seedGenericTemplatesOnce().
    Each is a standalone, theologically-neutral-within-its-tradition
    starting point — no Pillar-specific phrasing. Movement keys mostly
@@ -4126,24 +4125,18 @@ const LUTHERAN_TEMPLATE = [
    still gets seeded into browsers that already ran this for the
    others, and so deleting any one of them on purpose is respected
    (its own flag stays set, so it won't reappear) without affecting
-   the others. "Baptist Default" isn't seeded here — it's DEFAULT_
-   TEMPLATE now, so it's already what every new Builder starts as.
-   "Reformed (PCA-style)"/REFORMED_PCA_TEMPLATE and "Baptist
-   (9Marks-style)"/BAPTIST_9MARKS_TEMPLATE were retired 2026-08-06 in
-   favor of REFORMED_TEMPLATE seeded under the plain name "Reformed" —
-   a new flag key so it seeds fresh even into browsers that already
-   ran the old PCA-style seed.
+   the others. "Baptist Default" isn't seeded here — it's
+   DEFAULT_TEMPLATE, so it's already what every new Builder starts as.
 
-   Anglican and Lutheran got a forced one-time re-seed the same day:
-   unlike seedOne (which only writes if nothing already exists under
-   that name), forceUpdateOnce below overwrites unconditionally the
-   first time its flag is unset — on purpose, so browsers that already
-   had the pre-2026-08-06 content actually pick up the update instead
-   of being silently skipped by the "don't clobber" guard. It's still
-   a *one-time* flag: it fires once per browser, sets its flag, and
-   never runs again — so it can't touch anything the user renames,
-   edits, or deletes on that template afterward, this time or any
-   future time this file gets deployed with unchanged flag keys.
+   Anglican and Lutheran use forceUpdateOnce instead: unlike seedOne
+   (which only writes if nothing already exists under that name), it
+   overwrites unconditionally the first time its flag is unset, so a
+   browser holding an earlier version of that template picks up the
+   current one instead of being skipped by the "don't clobber" guard.
+   It's still a *one-time* flag: it fires once per browser, sets its
+   flag, and never runs again — so it can't touch anything the user
+   renames, edits, or deletes on that template afterward, as long as
+   the flag key stays the same.
 --------------------------------------------------------------------- */
 function seedGenericTemplatesOnce(){
   try{
@@ -4166,7 +4159,7 @@ function seedGenericTemplatesOnce(){
     forceUpdateOnce('templateSeeded_anglican_20260806', 'Anglican (Rite II)', ANGLICAN_TEMPLATE);
     forceUpdateOnce('templateSeeded_lutheran_20260806', 'Lutheran (Divine Service)', LUTHERAN_TEMPLATE);
     // "Pillar Reformed Church" — a fixed example snapshot of Pillar's own
-    // CRW liturgy structure, added 2026-08-07 so other churches
+    // CRW liturgy structure, so other churches
     // evaluating the app can see/try a real, slightly-tweaked-from-
     // standard CRW order. Deliberately separate from the "Covenant
     // Renewal Worship" template (Pillar's own live/editable template,
@@ -4174,7 +4167,7 @@ function seedGenericTemplatesOnce(){
     // account actually uses week to week, while this one is a stable
     // reference copy for the generic template gallery — edits to either
     // one never touch the other. Safe to share the display name "Pillar
-    // Reformed Church" with the pre-2026-08-04 legacy template key: the
+    // Reformed Church" with the template's earlier key: the
     // migration in seedPillarTemplateOnce() only renames/deletes that
     // key when 'Covenant Renewal Worship' is still missing, which is
     // never true by the time this runs (seedPillarTemplateOnce always
@@ -4197,19 +4190,17 @@ let builderIsPristine = true;
 
 // Retired element types get migrated on load so old saved data (local archive,
 // cloud, or a downloaded liturgy file) keeps working without the user having
-// to manually re-pick a type for every old element. (No retired types
-// currently — 'rubric' was folded into 'text' for a while, then brought back
-// as its own type with different rendering, so it no longer needs migrating.)
+// to manually re-pick a type for every old element. (There are no retired
+// types at the moment.)
 function migrateElementType(type){
   return type;
 }
-// One-off data fix: earlier data (the Pillar Reformed Church example
-// template, and — for a while — real Covenant Renewal Worship services
-// seeded/synced from it) had "Blessing of the Bread"/"Blessing of the
-// Wine" mistakenly typed as Collect ("variant-text") instead of Prayer.
-// Runs on every load path (template apply, date load, archive load,
-// imported file) so already-seeded/synced/archived copies get corrected
-// too, not just the built-in template source.
+// Data fix: some saved copies (of the Pillar Reformed Church example
+// template, and Covenant Renewal Worship services seeded from it) have
+// "Blessing of the Bread"/"Blessing of the Wine" mistakenly typed as
+// Collect ("variant-text") instead of Prayer. Runs on every load path
+// (template apply, date load, archive load, imported file) so every
+// copy gets corrected, not just the built-in template source.
 function migrateElement(e){
   if(e.type === 'variant-text' && Array.isArray(e.variants) &&
      (e.title === 'Blessing of the Bread' || e.title === 'Blessing of the Wine')){
@@ -4426,8 +4417,8 @@ function plannerLinkSelectHtml(el){
   const options = scheduleColumns.map(c => `<option value="${escapeAttr(c.key)}" ${c.key===current?'selected':''}>${escapeHTML(c.label)}${hiddenCols.has(c.key) ? ' (hidden)' : ''}</option>`).join('');
   // An element can outlive the column it points at — remove a column from the
   // Planner and the link is still on the element, but with no matching option
-  // the dropdown falls back to showing "Not linked". Picking that then changes
-  // nothing (the value is already ''), so the link couldn't be cleared at all.
+  // the dropdown would fall back to showing "Not linked". Picking that would
+  // change nothing (the value is already ''), so the link couldn't be cleared.
   // Give the orphan its own option so the dropdown tells the truth and
   // choosing "Not linked" actually fires a change.
   const orphanOption = (current && !currentCol)
@@ -4699,10 +4690,10 @@ function placeholderFor(type){
 // 'leader'/'people' slots plus every extraLines entry — as a flat array of
 // tokens ('leader', 'people', or an extraLines id). el.lineOrder holds
 // whatever the user has dragged into place; anything missing from it (a
-// brand-new element, an extra line just added, or old data saved before
-// lineOrder existed) falls back to the original fixed order (leader, people,
-// then extra lines in array order) so nothing old ever looks different until
-// the user actually drags something. Shared by the Builder render, print, and
+// brand-new element, an extra line just added, or data saved without a
+// lineOrder) falls back to the default order (leader, people, then extra
+// lines in array order) until the user drags something. Shared by the
+// Builder render, print, and
 // docx export so all three always agree on line order.
 function getResponseLineOrder(el){
   const extraIds = (el.extraLines || []).map(l => l.id);
@@ -5148,12 +5139,11 @@ document.addEventListener('keyup', function(e){
 document.addEventListener('scroll', hideFloatingToolbar, true);
 
 /* ---------------------------------------------------------------------
-   Live rich-text editor (Phase 1: Announcements + Pastoral Prayer only).
-   These fields are real contenteditable regions instead of plain
-   textareas — type **bold** and it becomes bold immediately, type
-   "1. " at the start of a line and it becomes a real numbered list.
-   Content is stored as sanitized HTML directly (no more marker-text
-   parsing at print time for these specific fields) and the same
+   Live rich-text editor for the Builder's text fields. These are real
+   contenteditable regions instead of plain textareas — type **bold**
+   and it becomes bold immediately, type "1. " at the start of a line
+   and it becomes a real numbered list. Content is stored as sanitized
+   HTML directly (no marker-text parsing at print time) and the same
    sanitized HTML is what shows in print — one true representation
    for both editing and output.
 --------------------------------------------------------------------- */
@@ -5170,7 +5160,7 @@ function sanitizeRichNode(node){
     if(child.nodeType !== Node.ELEMENT_NODE){ node.removeChild(child); return; }
     // A <span> is kept only to carry one of our own text-color classes, and
     // only that class survives — any other span (pasted markup, a leftover
-    // from the browser) is unwrapped exactly as before.
+    // from the browser) is unwrapped.
     if(child.tagName === 'SPAN'){
       const cls = child.getAttribute('class') || '';
       while(child.attributes.length > 0) child.removeAttribute(child.attributes[0].name);
@@ -5193,11 +5183,11 @@ function sanitizeRichNode(node){
   });
 }
 // Emptying a contenteditable doesn't leave it actually empty — every browser
-// leaves a stray <br> (and sometimes an empty <div>/<p>) behind. That markup
-// still counted as content, so a box the user had typed in and then wiped
-// stored "<br>" instead of "", and both the red "fill this in" border and the
-// placeholder stayed off for good. Treat markup carrying no visible text as
-// empty, everywhere content is read in or written back out.
+// leaves a stray <br> (and sometimes an empty <div>/<p>) behind. Counted as
+// content, that markup would make a wiped box store "<br>" instead of "",
+// and keep both the red "fill this in" border and the placeholder off. So
+// markup carrying no visible text is treated as empty, everywhere content
+// is read in or written back out.
 function isRichContentEmpty(html){
   if(!html) return true;
   return !html.replace(/<[^>]*>/g, '').replace(/&nbsp;| /g, ' ').trim();
@@ -5313,7 +5303,7 @@ function handleRichEditorBlur(e){
   if(isRichContentEmpty(e.target.innerHTML)) e.target.innerHTML = '';
 }
 function handleRichEditorKeydown(e){
-  // Fix: pressing Backspace at the very start of the FIRST item in a
+  // Pressing Backspace at the very start of the FIRST item in a
   // bulleted/numbered list does nothing in most browsers (there's no
   // preceding character to delete and no more list levels to outdent
   // to), leaving the user stuck unable to remove an accidentally-created
@@ -5368,9 +5358,8 @@ function resetTemplate(){
 
 /* ---------------------------------------------------------------------
    Liturgy Templates — named, reusable movement/element skeletons beyond
-   the single built-in DEFAULT_TEMPLATE. First step toward the longer-term
-   goal of a blank skeleton app other churches could customize to their
-   own liturgy: this is what lets someone build out a structure once (or
+   the single built-in DEFAULT_TEMPLATE, so any church can shape the app
+   to its own liturgy: this is what lets someone build out a structure once (or
    several variants — e.g. a normal Sunday vs. a Communion-less service)
    and reapply it to a fresh date without starting from scratch or
    re-picking the default every time. Stored the same fails-safe-to-
@@ -5395,10 +5384,10 @@ function saveLiturgyTemplatesToStorage(){
    the built-in DEFAULT_TEMPLATE (Baptist Default), for: first load of
    a fresh browser, "Reset to Default Template", opening a new date
    with no saved service yet, and deleting the currently-open service.
-   Without this, a church whose own liturgy looks nothing like Baptist
-   Default (e.g. Pillar's Covenant Renewal Worship) gets dropped into
-   an unfamiliar skeleton on a brand-new device the first time they
-   sign in there — the actual bug report that prompted this feature.
+   Without it, a church whose own liturgy looks nothing like Baptist
+   Default (e.g. Pillar's Covenant Renewal Worship) would get dropped
+   into an unfamiliar skeleton on a brand-new device the first time
+   they sign in there.
    Synced the same way as everything else here: local always,
    Supabase 'shared_data' (key 'defaultTemplateName') when signed in.
    Empty string means "use the built-in DEFAULT_TEMPLATE" — pushed to
@@ -5430,8 +5419,8 @@ function getEffectiveDefaultTemplate(){
 --------------------------------------------------------------------- */
 function seedPillarTemplateOnce(){
   try{
-    // Migration: browsers that seeded before the 2026-08-04 rename have
-    // this saved under the old name 'Pillar Reformed Church' — move it
+    // Migration: browsers that seeded under the template's earlier name have
+    // it saved as 'Pillar Reformed Church' — move it
     // to the new name once, without touching anything the user may have
     // since edited/renamed/deleted under either name.
     if(liturgyTemplates['Pillar Reformed Church'] && !liturgyTemplates['Covenant Renewal Worship']){
@@ -5447,11 +5436,10 @@ function seedPillarTemplateOnce(){
     }
   }catch(e){}
 }
-// One-off repair pass: earlier versions of the Pillar Reformed Church
-// example template (and, for a while, real Covenant Renewal Worship data
-// seeded from it before this was caught) had "Blessing of the Bread"/
-// "Blessing of the Wine" mistakenly typed as Collect ("variant-text")
-// instead of Prayer. loadStateFromTemplate() et al. already correct this
+// Repair pass: some stored copies of the Pillar Reformed Church example
+// template (and Covenant Renewal Worship data seeded from it) have
+// "Blessing of the Bread"/"Blessing of the Wine" mistakenly typed as
+// Collect ("variant-text") instead of Prayer. loadStateFromTemplate() et al. correct this
 // on the fly for whatever's currently open in the Builder (see
 // migrateElement), but the *stored* template needs fixing too, or every
 // future service built from it just inherits the same mistake again.
@@ -5629,8 +5617,8 @@ function saveToFile(){
 /* ---------------------------------------------------------------------
    Word (.docx) export. A .docx is just a ZIP of XML parts, so this
    hand-builds the OOXML directly (word/document.xml + the handful of
-   parts Word requires) and zips it with JSZip, which the hymnal
-   importer already loads — no extra dependency needed. Schema element
+   parts Word requires) and zips it with JSZip, which hymn playback
+   also uses — no extra dependency needed. Schema element
    order below (pBdr, spacing, ind, jc in pPr; b, i, strike, color, sz,
    highlight, u in rPr) is not arbitrary — Word/LibreOffice reject or
    silently reorder anything out of sequence, so don't rearrange these
@@ -6082,9 +6070,9 @@ function liveFontPopoverOutsideClick(e){
 /* Pin the page behind the overlay while Presentation Mode is open. The
    overlay is position:fixed, but the document underneath still scrolls, and
    on iOS a drag that runs past the end of the liturgy carries on into that
-   document — which in a home-screen PWA triggers pull-to-refresh. Reported as
-   an older (iOS 16) iPad reloading, or dropping out of, Presentation Mode
-   when the reader scrolled up. position:fixed on the body loses the scroll
+   document — which in a home-screen PWA triggers pull-to-refresh. On an older
+   (iOS 16) iPad that shows up as Presentation Mode reloading, or closing,
+   when the reader scrolls up. position:fixed on the body loses the scroll
    position, so it's stashed and put back on exit. */
 let liveModeSavedScrollY = 0;
 function setLiveModeBodyLock(locked){
@@ -6345,11 +6333,10 @@ async function onDateChange(){
   const dateStr = document.getElementById('serviceDate').value;
   if(!dateStr) return;
   // Re-"opening" the date that's already loaded (e.g. clicking it again in
-  // the Services panel) used to still fall through to the cloud fetch below
-  // and blindly replace `state` with whatever's currently in Supabase —
-  // discarding any local edits from the last few seconds that hadn't
-  // autosaved yet, with nothing having asked to overwrite them. There's
-  // nothing to open that isn't already open, so just no-op.
+  // the Services panel) does nothing. Falling through to the cloud fetch
+  // below would replace `state` with whatever's currently in Supabase,
+  // discarding any local edits from the last few seconds that haven't
+  // autosaved yet.
   if(dateStr === currentLoadedDate) return;
   builderIsPristine = false;
 
@@ -6427,8 +6414,8 @@ async function onDateChange(){
 }
 /* ---------------------------------------------------------------------
    Supabase cloud sync — optional, additive layer for sharing services
-   across devices/people. If you never sign in, the app behaves exactly
-   as it always has, purely local. Signing in adds a shared copy of
+   across devices/people. If you never sign in, the app is purely
+   local. Signing in adds a shared copy of
    each service in a "liturgies" table, keyed by date, that any signed-in
    teammate's browser can read and write.
 --------------------------------------------------------------------- */
@@ -6534,8 +6521,10 @@ async function restoreSupabaseSession(){
   }
 }
 /* ---------------------------------------------------------------------
-   Phase 2 cloud sync — the Planner (Schedule) and the shared roster
-   data (ministers, minister colors, sermon series, ESV API key). Same
+   Shared cloud data — the Planner (Schedule) and its columns, plus the
+   shared lists and settings (ministers, their colors and login links,
+   sermon series, templates, resource links, prayer library, church
+   name, default template, ESV API key). Same
    fails-safe-to-local pattern as the liturgy archive: one small
    key/value table in Supabase holds each of these as a single JSON
    document, keyed by name, synced by SHARED_DOCS in sync.js. Column
@@ -6556,8 +6545,7 @@ async function pullSharedDataOnSignIn(){
     takeInSharedDoc('scheduleColumnsConfig', cloud.scheduleColumnsConfig);
   }else if(!scheduleColumnsHasLocalSave && isPillarChurchName(cloud.churchName)){
     // Pillar's account but no scheduleColumnsConfig row has ever been
-    // saved to the cloud (true for any browser predating this config
-    // being persisted at all). Adopt Pillar's real layout rather than
+    // saved to the cloud. Adopt Pillar's real layout rather than
     // leaving this session on the generic seed, and persist it now so
     // every future load/sign-in — on this browser or any other — has a
     // real saved record instead of relying on this fallback again.
@@ -6895,7 +6883,7 @@ async function fetchEsvForReading(id, key){
 
 /* ---------------------------------------------------------------------
    Automatic Bible fetching. Same underlying calls as the manual "Fetch
-   ESV/KJV" buttons (which stay, and always work exactly as before), but
+   ESV/KJV" buttons (which are always available), but
    triggered automatically — when a reference field is filled in and
    left (blur), or right after a date sync fills in the Lectionary
    references — instead of waiting for a click. Runs silently (no
@@ -7005,13 +6993,13 @@ function setMinisterColor(name, hex){
   render();
 }
 /* ---------------------------------------------------------------------
-   Minister login links (Phase 1 of the collaboration/assignment feature).
+   Minister login links.
    Purely a name -> email map, same shared-data pattern as ministerColors.
    No self-service signup: the user creates each minister's Supabase Auth
    login manually in the dashboard, then links it here by email so the
    app can recognize "this signed-in user IS Minister X" (see
    getCurrentUserMinister()). Linking is optional and discreet — an
-   unlinked minister behaves exactly as before, name/color only.
+   unlinked minister is just a name and color.
 --------------------------------------------------------------------- */
 let ministerEmails = {};
 function loadMinisterEmails(){
@@ -7027,10 +7015,9 @@ function saveMinisterEmails(){
 }
 /* ---------------------------------------------------------------------
    Mid-session refresh for the shared roster data (minister roster,
-   colors, linked login emails, sermon series) — this used to only ever
-   sync down once, at sign-in (see pullSharedDataOnSignIn), so a name,
-   color, or series another signed-in device added stayed invisible here
-   until this browser signed out and back in. Deliberately narrower than
+   colors, linked login emails, sermon series), so a name, color, or
+   series another signed-in device adds shows up here without signing
+   out and back in. Deliberately narrower than
    pullSharedDataOnSignIn: nothing here touches the open liturgy's
    `state`, so — unlike that function's unconditional whole-Builder
    render() — it's safe to run on a timer without risking a disruptive
@@ -7066,9 +7053,9 @@ function getCurrentUserMinister(){
   return ministerRoster.find(name => (ministerEmails[name] || '').toLowerCase() === email) || null;
 }
 /* ---------------------------------------------------------------------
-   Phase 4 of the collaboration/assignment feature — in-app notification
-   bell. Diffs each liturgy's assignedMinisters against notifiedMinisters
-   (set up in Phase 2's performAutosave) to find assignments the signed-in
+   In-app notification bell. Diffs each liturgy's assignedMinisters
+   against notifiedMinisters (kept by performAutosave) to find
+   assignments the signed-in
    minister hasn't seen yet. Purely client-side, piggybacking on the
    existing liturgies table — no new Supabase schema. Only covers upcoming
    (today-or-later) services, since a past assignment isn't actionable.
@@ -7170,7 +7157,7 @@ async function markNotificationRead(dateStr){
   if(!myMinisterName) return;
   const entry = notifSourceArchive[dateStr];
   if(!entry) return;
-  // Only the read list changes. Saving the whole `entry` here pushed a
+  // Only the read list changes. Saving the whole `entry` here would push a
   // possibly minutes-old copy of the service and could wipe newer edits.
   const addMe = snap => {
     const notified = new Set(Array.isArray(snap.notifiedMinisters) ? snap.notifiedMinisters : []);
@@ -7389,7 +7376,7 @@ async function renameMinisterEverywhere(oldName){
   //    aren't guaranteed to hold an exact roster-name match (abbreviations,
   //    "Name?" notes, first-name-only), so only exact matches are rewritten
   //    automatically — anything else is listed for the pastor to review and
-  //    fix by hand, per their explicit "I can help you match as needed".
+  //    fix by hand.
   const cleanWord = s => (s || '').toLowerCase().replace(/[?.,]/g, '').trim();
   const oldWords = cleanWord(oldName).split(/\s+/).filter(Boolean);
   let plannerExactCount = 0;
@@ -7498,7 +7485,7 @@ function saveSermonSeriesRoster(){
    the Planner schedule, minister roster/colors/emails, sermon series,
    liturgy templates, hymn tempo overrides, schedule column settings)
    into one JSON file. This is also what the 2-week backup nudge below
-   now runs — "Save now" on that banner calls this same function.
+   runs — "Save now" on that banner calls this same function.
 --------------------------------------------------------------------- */
 const BACKUP_KEYS = ['liturgyArchive','liturgySchedule','ministerRoster','ministerColors',
   'ministerEmails','sermonSeriesRoster','liturgyTemplates','hymnTempoOverrides',
@@ -7529,9 +7516,8 @@ function backupAllData(){
    Restore from a full data backup file. Overwrites everything named
    above in local storage, then — if signed in — also pushes the
    restored liturgies and shared roster/schedule data up to Supabase,
-   so the cloud copy matches instead of silently overwriting the
-   restore back on next load (cloud sync otherwise keeps whichever
-   copy is larger). Reloads the page afterward so every part of the
+   filling in whatever the cloud is missing without overwriting what
+   it has. Reloads the page afterward so every part of the
    app picks up the restored data fresh, rather than trying to patch
    every already-loaded in-memory variable by hand.
 --------------------------------------------------------------------- */
@@ -7564,10 +7550,8 @@ function restoreAllDataFromFile(file){
       }
       // Note: the Planner schedule is stored locally under
       // 'liturgySchedule' but synced to the cloud under the shorter key
-      // 'schedule' (see saveSchedule()) — this mapping was previously
-      // missing here, so restoring from a backup file silently wrote the
-      // schedule to an unused cloud row instead of the one every device
-      // actually reads, leaving the cloud copy stale after a restore.
+      // 'schedule' (see SHARED_DOCS in sync.js), so the restore has to map
+      // one to the other or it would write to a cloud row no device reads.
       const CLOUD_KEY_ALIASES = { liturgySchedule: 'schedule' };
       for(const key of BACKUP_CLOUD_SHARED_KEYS){
         if(payload.data[key] !== undefined){
@@ -7621,7 +7605,7 @@ function backupMenuOutsideClick(e){
 
 /* ---------------------------------------------------------------------
    Liturgical Resources menu — curated external links plus user-added
-   custom links (stored locally, this device only).
+   custom links (shared with signed-in teammates).
 --------------------------------------------------------------------- */
 const DEFAULT_LITURGICAL_RESOURCES = [
   { label: 'Monergism — Worship', url: 'https://www.monergism.com/topics/worship' },
@@ -8541,7 +8525,7 @@ function hymnalQuickAdd(num, selectEl){
 
 
 /* ---------------------------------------------------------------------
-   Hymn playback (Phase 1) — parses each hymn's MusicXML (packaged as a
+   Hymn playback — parses each hymn's MusicXML (packaged as a
    compressed .mxl file) and plays all four voices together as one
    real piano sound, via Tone.js + the Salamander Grand Piano samples
    (hosted free at tonejs.github.io, MIT/CC-BY). No sheet music is
@@ -8552,9 +8536,7 @@ function hymnalQuickAdd(num, selectEl){
    timing is recomputed directly from the MusicXML data, not audio
    resampling, so there's no pitch-shifting from changing tempo.
 
-   HYMN_BASE_PATH is the one setting that may need adjusting depending
-   on the exact folder name/structure used when the hymn files were
-   pushed to the repo.
+   HYMN_BASE_PATH has to match the folder the hymn files live in.
 --------------------------------------------------------------------- */
 const HYMN_BASE_PATH = 'hymns/';
 const HYMN_FILE_MAP = {"1":"Psalm 1 Becker DW.mxl","2":"Psalm 1 Irish.mxl","3":"Psalm 1 Canaan.mxl","4":"Psalm 2 Salzburg (Hintze).mxl","5":"Psalm 2 Genevan DW.mxl","6":"Psalm 2 Alliance.mxl","7":"Psalm 3 Becker DPOII.mxl","8":"Psalm 3 DW Der Tag.mxl","9":"Psalm 4 Diniweidrwydd.mxl","10":"Psalm 4 NCG.mxl","11":"Psalm 4 Roberts.mxl","12":"Psalm 5a Wilbur.mxl","13":"Psalm 5b Ne V Slovakh.mxl","14":"Psalm 5 Aus Der Tiefe.mxl","15":"Psalm 5 Becker DW.mxl","16":"Psalm 6 Genevan BoP.mxl","17":"Psalm 6 Befiehl Du.mxl","18":"Psalm 6 NCG.mxl","19":"Psalm 7 Oakwood 1p.mxl","20":"Psalm 7 Expression.mxl","21":"Psalm 7 So Giebst Du.mxl","22":"Psalm 8 Laredo.mxl","23":"Psalm 8 Amsterdam.mxl","24":"Psalm 8 Thanksgiving.mxl","25":"Psalm 9 Wilbur.mxl","26":"Psalm 9 NCG.mxl","27":"Psalm 9 Building.mxl","28":"Psalm 10A Burford.mxl","29":"Psalm 10B Abridge.mxl","30":"Psalm 10A Song 12.mxl","31":"Psalm 10B Farley Castle.mxl","32":"Psalm 10 Genevan DW.mxl","33":"Psalm 11 Bourbon.mxl","34":"Psalm 11 Becker DPOII.mxl","35":"Psalm 12 Becker MDS.mxl","36":"Psalm 12 Warner prose.mxl","37":"Psalm 12 Genevan DW.mxl","38":"Psalm 13 Genevan BoP.mxl","39":"Psalm 13 How Long.mxl","40":"Psalm 14 Genevan BoP.mxl","41":"Psalm 14 Song 20.mxl","42":"Psalm 15 Sherwood.mxl","43":"Psalm 15 Becker 1.mxl","44":"Psalm 15 St Flavian.mxl","45":"Psalm 16 Sterling.mxl","46":"Psalm 16 Becker DPOII.mxl","47":"Psalm 17 Gwndwngwyn.mxl","48":"Psalm 17a St Olives.mxl","49":"Psalm 17b Fairfield (Hitchcock).mxl","50":"Psalm 18 Becker DW 2pp.mxl","51":"Psalm 18A Saint-Saens.mxl","52":"Psalm 18B Freuen Wir Uns.mxl","53":"Psalm 18C Brewer.mxl","54":"Psalm 18D Pursuit.mxl","55":"Psalm 19A Burnham (Clark).mxl","56":"Psalm 19B Christchurch.mxl","57":"Psalm 19A Columbia.mxl","58":"Psalm 19b Hampton.mxl","59":"Psalm 19 Genevan NGP.mxl","60":"Psalm 20 Leighton.mxl","61":"Psalm 20 Becker DW.mxl","62":"Psalm 20 NCG.mxl","63":"Psalm 21a New Concord.mxl","64":"Psalm 21b Elfaker.mxl","65":"Psalm 21 San Rocco.mxl","66":"Psalm 21 Becker DW.mxl","67":"Psalm 22a Donelson.mxl","68":"Psalm 22B Becker.mxl","69":"Psalm 22a Coleshill.mxl","70":"Psalm 22B Wilbur 3sys.mxl","71":"Psalm 22b Kingsfold.mxl","72":"Psalm 22C Creation.mxl","73":"Psalm 23 Brother James' Air.mxl","74":"Psalm 23 Crimond.mxl","75":"Psalm 23 St. Columba.mxl","76":"Psalm 24 Erb prose.mxl","77":"Psalm 24 Mirfield.mxl","78":"Psalm 24 Becker DW.mxl","79":"Psalm 25a Bombarde.mxl","80":"Psalm 25b Cloverdale.mxl","81":"Psalm 25 Glenfinlas.mxl","82":"Psalm 26 Becker DPOII.mxl","83":"Psalm 26 Canaan (Bailey).mxl","84":"Psalm 27 Becker DW.mxl","85":"Psalm 27 Glouchestershire Wassail.mxl","86":"Psalm 28A Owen.mxl","87":"Psalm 28B Kirk Braddan.mxl","88":"Psalm 28 Wondrous Book.mxl","89":"Psalm 29 Wilbur.mxl","90":"Psalm 29 Genevan BoP.mxl","91":"Psalm 29 Erb prose.mxl","92":"Psalm 30 St. John.mxl","93":"Psalm 30a Mach's Mit Mir, Gott.mxl","94":"Psalm 30b Saxony.mxl","95":"Psalm 31 Citadel.mxl","96":"Psalm 31 GLORY SHONE AROUND.mxl","97":"Psalm 31 Becker CW.mxl","98":"Psalm 32 Genevan BoP.mxl","99":"Psalm 32 Dent Dale.mxl","100":"Psalm 33 Zion's Light 1p.mxl","101":"Psalm 33 NCG.mxl","102":"Psalm 33 Genevan BoP.mxl","103":"Psalm 34 Cromorne.mxl","104":"Psalm 34 Yorkshire.mxl","105":"Psalm 34 Blaenwern.mxl","106":"Psalm 35a Oran na prasaich.mxl","107":"Psalm 35b Sons of Sorrow.mxl","108":"Psalm 35c Long Oaks.mxl","109":"Psalm 35 Genevan BoP.mxl","110":"Psalm 36 Noel.mxl","111":"Psalm 36 St Gregory.mxl","112":"Psalm 37 Guilsborough.mxl","113":"Psalm 37 Deyo Bost 5-4.mxl","114":"Psalm 37 Dinbych.mxl","115":"Psalm 38 Wilbur.mxl","116":"Psalm 38 Genevan BoP overlap.mxl","117":"Psalm 38 Remember Love.mxl","118":"Psalm 39 Gwyneth.mxl","119":"Psalm 39 Tyddyn Llwyn.mxl","120":"Psalm 39a Primrose.mxl","121":"Psalm 39b Suffield.mxl","122":"Psalm 39c Cobham.mxl","123":"Psalm 40a Fingal.mxl","124":"Psalm 40b Merthyr Tydfil.mxl","125":"Psalm 40 England's Lane.mxl","126":"Psalm 41 Forest Hill.mxl","127":"Psalm 41 Pilgrim.mxl","128":"Psalm 42 Gedackt.mxl","129":"Psalm 42 Genevan Cruger.mxl","130":"Psalm 42 O Waly Waly.mxl","131":"Psalm 43 Genevan BoP.mxl","132":"Psalm 43 Martyrs.mxl","133":"Psalm 43 Tyrant Herod.mxl","134":"Psalm 44 Spring Place.mxl","135":"Psalm 44a Old 44th.mxl","136":"Psalm 44b Dragon's Place.mxl","137":"Psalm 45 Becker DW.mxl","138":"Psalm 45 Nielsen.mxl","139":"Psalm 45 Leominster.mxl","140":"Psalm 46 Stroudwater.mxl","141":"Psalm 46 Verbum Supernum.mxl","142":"Psalm 46 God Our Refuge.mxl","143":"Psalm 47 Petersham.mxl","144":"Psalm 47 Genevan NGP.mxl","145":"Psalm 47 Gomolka MEO.mxl","146":"Psalm 47 Becker TMM.mxl","147":"Psalm 48 Doxology.mxl","148":"Psalm 48 Becker.mxl","149":"Psalm 48 Bon Accord.mxl","150":"Psalm 48 Tangnefedd.mxl","151":"Psalm 49 Hohen.mxl","152":"Psalm 49a Dark Parable.mxl","153":"Psalm 49 Rose Hill.mxl","154":"Psalm 50 Symphony.mxl","155":"Psalm 50a Old 104th EH.mxl","156":"Psalm 50b Playford 50.mxl","157":"Psalm 51 Miserere.mxl","158":"Psalm 51 Corona.mxl","159":"Psalm 51A St Mary.mxl","160":"Psalm 51B Ajalon.mxl","161":"Psalm 51 Carew.mxl","162":"Psalm 52 Mischief Vaunting.mxl","163":"Psalm 52 Becker.mxl","164":"Psalm 52 Stanley Beach.mxl","165":"Psalm 53 York.mxl","166":"Psalm 53 Asbury.mxl","167":"Psalm 54 Aston.mxl","168":"Psalm 54 St. Bees.mxl","169":"Psalm 55a Llyfnant.mxl","170":"Psalm 55b Aberhonddu.mxl","171":"Psalm 55c Sirioldeb.mxl","172":"Psalm 55 St. Issey.mxl","173":"Psalm 55C FLORIDA.mxl","174":"Psalm 56 Consolation.mxl","175":"Psalm 56 Had I Ten Thousand.mxl","176":"Psalm 56 Ascend.mxl","177":"Psalm 57 Porba Hullock.mxl","178":"Psalm 57 Be Exalted, O God.mxl","179":"Psalm 57 Wilbur.mxl","180":"Psalm 58 Worcester.mxl","181":"Psalm 58 Shepherd's Pipes.mxl","182":"Psalm 58 Becker.mxl","183":"Psalm 59 Deliver Me.mxl","184":"Psalm 59a Black Decree.mxl","185":"Psalm 59b Ravendale.mxl","186":"Psalm 59 Dim Byd.mxl","187":"Psalm 60 Church Hymn XVI.mxl","188":"Psalm 60 Scourge.mxl","189":"Psalm 60a Ottery St. Mary.mxl","190":"Psalm 60b Animae Hominum.mxl","191":"Psalm 61 Advent (Plymouth).mxl","192":"Psalm 61 Sidney (Owens).mxl","193":"Psalm 61 Lift.mxl","194":"Psalm 62 Genevan BoP.mxl","195":"Psalm 62 Fourth Mode Melody.mxl","196":"Psalm 62 NCG.mxl","197":"Psalm 63 Hagerstown.mxl","198":"Psalm 63 Third Mode Melody.mxl","199":"Psalm 64 Salvation (Boyd) 2009.mxl","200":"Psalm 64 Northright.mxl","201":"Psalm 65 Becker DPOII.mxl","202":"Psalm 65 Genevan Koyzis.mxl","203":"Psalm 65 RAINBOW.mxl","204":"Psalm 66 Triumph (Payton).mxl","205":"Psalm 66 St Matthew.mxl","206":"Psalm 66b Wilbur.mxl","207":"Psalm 67 Miriam.mxl","208":"Psalm 67 Dover (Williams).mxl","209":"Psalm 68 Genevan BoP.mxl","210":"Psalm 68 Easter Skies.mxl","211":"Psalm 68 Wilbur.mxl","212":"Psalm 69 SUTTON 1 iter.mxl","213":"Psalm 69a Intercessor.mxl","214":"Psalm 69b Highwood.mxl","215":"Psalm 70 Crowle.mxl","216":"Psalm 70 Psalm Tone.mxl","217":"Psalm 70 Becker DPOII.mxl","218":"Psalm 71 Hymn of Praise.mxl","219":"Psalm 71 Wilbur.mxl","220":"Psalm 72 Rachie.mxl","221":"Psalm 72 Duke Street.mxl","222":"Psalm 72 Effingham.mxl","223":"Psalm 73a Osceola.mxl","224":"Psalm 73b Expostulation.mxl","225":"Psalm 73 GREENWICH.mxl","226":"Psalm 73 Wilbur.mxl","227":"Psalm 74 Dyffryn Baca.mxl","228":"Psalm 74a Torsten.mxl","229":"Psalm 74b Ancient of Days.mxl","230":"Psalm 75 Genevan.mxl","231":"Psalm 75 Becker DPOII.mxl","232":"Psalm 76 Neander.mxl","233":"Psalm 76 Tregwyddol.mxl","234":"Psalm 76 Aubery.mxl","235":"Psalm 77a Nest.mxl","236":"Psalm 77b Temple (Davies).mxl","237":"Psalm 77 Genevan NGP LeJeune.mxl","238":"Psalm 78ad Rockway.mxl","239":"Psalm 78b Old 18th.mxl","240":"Psalm 78c Stettin.mxl","241":"Psalm 78 Parting Glass.mxl","242":"Psalm 79b Wilbur.mxl","243":"Psalm 79 Palmyra (Bradshaw).mxl","244":"Psalm 79 Y Croeshoeliad.mxl","245":"Psalm 80 Genevan BoP.mxl","246":"Psalm 80 MONTAGUE.mxl","247":"Psalm 80 Vineyard Haven.mxl","248":"Psalm 81a Genevan BoP.mxl","249":"Psalm 81b Teague.mxl","250":"Psalm 81 Becker.mxl","251":"Psalm 81 Lincoln Tune.mxl","252":"Psalm 82 Erb prose.mxl","253":"Psalm 82 Complainer.mxl","254":"Psalm 82 Westminster (Turle).mxl","255":"Psalm 83 Salvum Fac 09.mxl","256":"Psalm 83 Gethsemane.mxl","257":"Psalm 84 Tiltey Abbey.mxl","258":"Psalm 84 Becker FRA.mxl","259":"Psalm 84 Melita.mxl","260":"Psalm 85 Salisbury.mxl","261":"Psalm 85 Calon Lan.mxl","262":"Psalm 85 St. Bernard.mxl","263":"Psalm 86 Anima Christi.mxl","264":"Psalm 86 Be Joyful.mxl","265":"Psalm 86 Wilbur.mxl","266":"Psalm 87 Edinburgh.mxl","267":"Psalm 87 Caersalem.mxl","268":"Psalm 88 Brynteg.mxl","269":"Psalm 88 Vergeef O Herr.mxl","270":"Psalm 89 Addison's.mxl","271":"Psalm 89 Addington.mxl","272":"Psalm 89 Wilbur.mxl","273":"Psalm 90 Amanda.mxl","274":"Psalm 90 St Anne.mxl","275":"Psalm 90 Das Alte Jahr.mxl","276":"Psalm 91 Funeral Hymn.mxl","277":"Psalm 91 Genevan Koyzis.mxl","278":"Psalm 91 NCG.mxl","279":"Psalm 91 Wilbur.mxl","280":"Psalm 92 Genevan BK Koyzis.mxl","281":"Psalm 92 Disciple.mxl","282":"Psalm 92 Darwall's.mxl","283":"Psalm 93 Rialto.mxl","284":"Psalm 93 Kensington New.mxl","285":"Psalm 93 Erb prose.mxl","286":"Psalm 94 Exaltation.mxl","287":"Psalm 94 Gorphenwyd.mxl","288":"Psalm 94 Austrian Hymn.mxl","289":"Psalm 95 Dietrich.mxl","290":"Psalm 95 Radwell.mxl","291":"Psalm 95 NINETY FIFTH.mxl","292":"Psalm 95 Tallis.mxl","293":"Psalm 96 Ach Herr.mxl","294":"Psalm 96 Genevan Koyzis.mxl","295":"Psalm 96 Pen Ucha.mxl","296":"Psalm 97 Becker DPOII.mxl","297":"Psalm 97 St Bartholomew.mxl","298":"Psalm 98 DESERT.mxl","299":"Psalm 98 Hermon (Pilcher).mxl","300":"Psalm 98 Cheerful.mxl","301":"Psalm 99 Sidney.mxl","302":"Psalm 99 Miles Lane.mxl","303":"Psalm 99 Genevan.mxl","304":"Psalm 100 Old 100th.mxl","305":"Psalm 100 Tridon.mxl","306":"Psalm 101 A Dwelling Fit.mxl","307":"Psalm 101 Becker DPOII.mxl","308":"Psalm 102 Wilbur.mxl","309":"Psalm 102 Social Band.mxl","310":"Psalm 103 Lauda Anima (Goss).mxl","311":"Bless the Lord, O My Soul.mxl","312":"Psalm 103 Lauda Anima (Andrews).mxl","313":"Psalm 103 Becker CW.mxl","314":"Psalm 103 Tidings.mxl","315":"Psalm 104a Selig Die Ihr.mxl","316":"Psalm 104b Ash Grove.mxl","317":"Psalm 104 NCG DPOII.mxl","318":"Psalm 104 Houghton (Gauntlett).mxl","319":"Psalm 105 Becker.mxl","320":"Psalm 105 Zion.mxl","321":"Psalm 105 Bucklebury.mxl","322":"Psalm 106 Chesed.mxl","323":"Psalm 106 Song 3.mxl","324":"Psalm 107 Genevan BK NGP.mxl","325":"Psalm 107a Gospel Liberty.mxl","326":"Psalm 107b The Lone Pilgrim.mxl","327":"Psalm 107c Gospel Liberty.mxl","328":"Psalm 107b Shanty.mxl","329":"Psalm 108 Becker DPOII.mxl","330":"Psalm 108b Gloria in Excelsis.mxl","331":"Psalm 108 Milton Abbas.mxl","332":"Psalm 109a Cymer DW.mxl","333":"Psalm 109b Veni Spiritus.mxl","334":"Psalm 109a NIB.mxl","335":"Psalm 109a Craig y Tyle.mxl","336":"Psalm 109b Penderi.mxl","337":"Psalm 110 All Saints New.mxl","338":"Psalm 110 Yahweh to My Lord.mxl","339":"Psalm 110 Free Scotland.mxl","340":"Psalm 111 Spiritus Vitae.mxl","341":"Psalm 111 Omni Die (Corner).mxl","342":"Psalm 111 Wilbur.mxl","343":"Psalm 112 Dilys.mxl","344":"Psalm 112 Cairns.mxl","345":"Psalm 113 Cuddesdon.mxl","346":"Psalm 113 Alcester.mxl","347":"Psalm 114 Lodsworth.mxl","348":"Psalm 114 Chester (Billings).mxl","349":"Psalm 115 Melrose.mxl","350":"Psalm 115 Oxenbridge.mxl","351":"Psalm 115 Non Nobis (Doyle).mxl","352":"Psalm 116 Genevan BoP.mxl","353":"Psalm 116 Nun Freut.mxl","354":"Psalm 117 Erb prose.mxl","355":"Psalm 117 Owens prose.mxl","356":"Psalm 117 SCHENECTADY.mxl","357":"Psalm 117 In Babilone.mxl","358":"Psalm 118 Genevan BoP.mxl","359":"Psalm 118 Maine.mxl","360":"Psalm 119 Fifth Mode Melody.mxl","361":"Psalm 119AB Andernach.mxl","362":"Psalm 119C St. Martin's.mxl","363":"Psalm 119D Nox Praecessit.mxl","364":"Psalm 119E Daniel.mxl","365":"Psalm 119F Greensides.mxl","366":"Psalm 119G Gott will's machen.mxl","367":"Psalm 119H Bowersburn.mxl","368":"Psalm 119I Charson.mxl","369":"Psalm 119J Nurnberg.mxl","370":"Psalm 119K Song 4.mxl","371":"Psalm 119L Deep Harmony.mxl","372":"Psalm 119MN Lawes 32.mxl","373":"Psalm 119O St. Mark.mxl","374":"Psalm 119P Margaret (Roberts).mxl","375":"Psalm 119Q Martin (Hughes).mxl","376":"Psalm 119R Bishopthorpe.mxl","377":"Psalm 119S Chilton Foliat.mxl","378":"Psalm 119T Song 5.mxl","379":"Psalm 119U O God of Love.mxl","380":"Psalm 119V RUSSIA.mxl","381":"Psalm 119 O Mensch Sieh.mxl","382":"Psalm 120 Culross.mxl","383":"Psalm 120 Dresden minor.mxl","384":"Psalm 120 Becker DPOII.mxl","385":"Psalm 121 Erb prose.mxl","386":"Psalm 121 Dundee.mxl","387":"Psalm 121 Sandon.mxl","388":"Psalm 122 Colchester.mxl","389":"Psalm 122 Erb prose.mxl","390":"Psalm 122 Calvary (Stanley).mxl","391":"Psalm 123 Verbum Pacis (Monk).mxl","392":"Psalm 123 Genevan BoP.mxl","393":"Psalm 123 Meirionydd.mxl","394":"Psalm 124 War' Gott.mxl","395":"Psalm 124 Richmond.mxl","396":"Psalm 124 GenevanScottish.mxl","397":"Psalm 125 Abbeyville.mxl","398":"Psalm 125 Erb prose.mxl","399":"Psalm 125 London New.mxl","400":"Psalm 125 Contemplation.mxl","401":"Psalm 126 Arthur's Seat.mxl","402":"Psalm 126 Geneva.mxl","403":"Psalm 126 Liberty (Payton).mxl","404":"Psalm 127 Becker 1887.mxl","405":"Psalm 127 Reagan.mxl","406":"Psalm 127 Credo.mxl","407":"Psalm 127 Erb prose.mxl","408":"Psalm 128 God's Favor.mxl","409":"Psalm 128 Kreider.mxl","410":"Psalm 128 All the Way.mxl","411":"Psalm 128 McKee 2sys.mxl","412":"Psalm 129 Becker DPOII.mxl","413":"Psalm 129 Evangel (Nock).mxl","414":"Psalm 129 Christ's Hospital.mxl","415":"Psalm 130 Aus Tiefer Not.mxl","416":"Psalm 130 Genevan BoP.mxl","417":"Psalm 130 Eastergate alt.mxl","418":"Psalm 131 Song 46.mxl","419":"Psalm 131 Llysfaen.mxl","420":"Psalm 131 Erb prose.mxl","421":"Psalm 132A Baca.mxl","422":"Psalm 132B Andre.mxl","423":"Psalm 132 Mead House.mxl","424":"Psalm 133 Ae Fond Kiss.mxl","425":"Psalm 133 Dunlap's Creek.mxl","426":"Psalm 133 Erb prose.mxl","427":"Psalm 134 Becker.mxl","428":"Psalm 134 Come Bless.mxl","429":"Psalm 134 Erb prose.mxl","430":"Psalm 135a Smart.mxl","431":"Psalm 135 Genevan BoP.mxl","432":"Psalm 135 Wareham.mxl","433":"Psalm 135 Blencathra.mxl","434":"Psalm 136 Croft's overlap.mxl","435":"Psalm 136 Monkland.mxl","436":"Psalm 136 Ever and Aye.mxl","437":"Psalm 136 Warrington 2sys.mxl","438":"Psalm 137 round.mxl","439":"Psalm 137 BABYLONIAN CAPTIVITY.mxl","440":"Psalm 137 Genevan BoP.mxl","441":"Psalm 137 Hickory Road DPOII.mxl","442":"Psalm 138 Wesley 2sys.mxl","443":"Psalm 138 Solothurn.mxl","444":"Psalm 139a Tender Thought.mxl","445":"Psalm 139A Sifflote.mxl","446":"Psalm 139B Puer Nobis.mxl","447":"Psalm 139 Search Me.mxl","448":"Psalm 139 Resignation.mxl","449":"Psalm 139 Sixth Mode Melody.mxl","450":"Psalm 140 Naomtha.mxl","451":"Psalm 140 Veni Creator.mxl","452":"Psalm 141 Becker DPOII.mxl","453":"Psalm 141 Calvisius.mxl","454":"Psalm 142 Goppa.mxl","455":"Psalm 142 Soles.mxl","456":"Psalm 142 Nicht So Traurig (Bach).mxl","457":"Psalm 143 Mourner.mxl","458":"Psalm 143B Kingsland.mxl","459":"Psalm 143 Llangloffan.mxl","460":"Psalm 144 Der Kreig JTT.mxl","461":"Psalm 144 Seventh Mode Melody.mxl","462":"Psalm 145 Jerusalem (Parry).mxl","463":"Psalm 145a Stuttgart.mxl","464":"Psalm 145b Rockingham.mxl","465":"Psalm 145 All Thy Works.mxl","466":"Psalm 146 Christ Is Risen.mxl","467":"Psalm 146 Ripley.mxl","468":"Psalm 146 Scottish.mxl","469":"Psalm 147 Gelobet Seist Du.mxl","470":"Psalm 147 Wilbur.mxl","471":"Psalm 147A Christian Hope.mxl","472":"Psalm 147B Lexington.mxl","473":"Psalm 148 NEWBURGH.mxl","474":"Psalm 148 St. Catherine's.mxl","475":"Psalm 148 Kirkpatrick.mxl","476":"Psalm 149 Laudate Dominum.mxl","477":"Psalm 149 Erb prose.mxl","478":"Psalm 149 Becker DPOII.mxl","479":"Psalm 150 Hutcheson prose.mxl","480":"Psalm 150 Genevan BoP.mxl","481":"Psalm 150 Alleluia Lowe.mxl","482":"Praise the God of Israel.mxl","483":"Isaiah, Mighty Seer, in Days of Old.mxl","484":"O Trinity of Blessed Light.mxl","485":"Oh, for a Thousand Tongues.mxl","486":"Holy God, We Praise Thy Name GROSSER GOTT.mxl","487":"Holy God, We Praise Your Name ZU GOTT.mxl","488":"We Praise Thee, O God (Te Deum).mxl","489":"Thee We Adore, Eternal Lord.mxl","490":"We Praise You, God of Heaven.mxl","491":"O Praise the Father.mxl","492":"'Round the Throne in Radiant Glory.mxl","493":"Come, Let Us Join Our Cheerful Songs.mxl","494":"'Round the Lord in Glory Seated.mxl","495":"Our Father, Thou in Heaven 6sys.mxl","496":"Salvation Comes from God the LORD.mxl","497":"Praise to the Lord, the Almighty.mxl","498":"In Thee Is Gladness.mxl","499":"Awake, My Soul, in Joyful Lays.mxl","500":"Oh, Could I Speak the Matchless Worth.mxl","501":"The Song of Hannah.mxl","502":"He Is the Image (Col.1).mxl","503":"Worthy Is the Lamb CHANT.mxl","504":"To God Be the Glory.mxl","505":"Love of the Father.mxl","506":"Great God, How Infinite Art Thou!.mxl","507":"Open Now Thy Gates of Beauty.mxl","508":"Glorious Things of Thee Are Spoken.mxl","509":"Sing Praise to God Who Reigns Above.mxl","510":"Holy, Holy, Holy!.mxl","511":"Lord Jesus Christ, Be Present Now.mxl","512":"All Glory Be to God Alone.mxl","513":"All Glory Be to God on High.mxl","514":"God Himself Is with Us.mxl","515":"We Give Thee But Thine Own.mxl","516":"We Worship Thee, Almighty Lord.mxl","517":"All Hail the Power CORONATION.mxl","518":"All Hail the Power DIADEM.mxl","519":"Great God of Wonders!.mxl","520":"The Love of God.mxl","521":"There Is a Redeemer.mxl","522":"Thou Art Worthy.mxl","523":"Unto Him Who Hath Loved Us.mxl","524":"Glorify Thy Name.mxl","525":"Jesu, Joy of Man's Desiring.mxl","526":"Open unto Us Your Word.mxl","527":"From Glory to Glory Advancing.mxl","528":"O Worship the King.mxl","529":"Ye Servants of God.mxl","530":"The Lord Is in His Holy Temple.mxl","531":"All Praise to Christ.mxl","532":"The Creed of Timothy.mxl","533":"Give Praise to God Who Reigns.mxl","534":"Come, Christians, Join to Sing.mxl","535":"Let All the World in Every Corner.mxl","536":"Come, Thou Almighty King.mxl","537":"Worship the Lord in the Beauty ÜTTINGEN.mxl","538":"O Come, Let Us Worship.mxl","539":"Brethren, We Have Met to Worship.mxl","540":"Rejoice, Ye Pure in Heart.mxl","541":"To Thy Temple I Draw Near.mxl","542":"Father Most Holy RVW SATB.mxl","543":"Immortal, Invisible, God Only Wise.mxl","544":"Come, Ye That Love the Lord.mxl","545":"Christ, We Do All Adore Thee.mxl","546":"Sing Hallelujah, Praise the Lord.mxl","547":"Glory Be to God the Father.mxl","548":"Morning Has Broken 2sys.mxl","549":"Our God in All Things.mxl","550":"I Sing the Mighty Power of God.mxl","551":"All Creatures of Our God and King.mxl","552":"How Great Thou Art.mxl","553":"Joyful, Joyful, We Adore Thee.mxl","554":"This Is My Father's World.mxl","555":"Fairest Lord Jesus.mxl","556":"For the Beauty of the Earth.mxl","557":"From All That Dwell.mxl","558":"When Morning Gilds the Skies.mxl","559":"Come, Let Us with Our Lord Arise.mxl","560":"This Is the Day the Lord.mxl","561":"O Day of Rest and Gladness.mxl","562":"Come, Ye Sinners, Poor and Needy.mxl","563":"Come to the Waters.mxl","564":"There’s a Wideness in God’s Mercy.mxl","565":"Come, Ye Souls by Sin Afflicted.mxl","566":"Come, Ye Disconsolate CONSOLATOR.mxl","567":"Come, Ye Disconsolate (Wilbur).mxl","568":"Hail, Sovereign Love, That First Began.mxl","569":"In the Fish (Jonah 2).mxl","570":"Give Ear, O Heavens (The Song of Moses pt.1).mxl","571":"But Jeshurun Waxed (Song of Moses pt.2).mxl","572":"Not What My Hands Have Done OLD 25TH.mxl","573":"Not What My Hands Have Done Wilbur.mxl","574":"Savior, When in Dust to Thee.mxl","575":"We Have Not Known Thee.mxl","576":"Our Father God, Thy Name We Praise.mxl","577":"O Jesus, Full of Pardoning Grace.mxl","578":"All Mankind Fell in Adam’s Fall.mxl","579":"Remember, O Thou Man.mxl","580":"Thy Works, Not Mine, O Christ.mxl","581":"Dear Lord and Father SATB.mxl","582":"Lord Jesus, Think on Me.mxl","583":"I Asked the Lord That I Might Grow.mxl","584":"A Malediction unis.mxl","585":"Now Is the Healing Time.mxl","586":"Lord, in This Thy Mercy's Day.mxl","587":"The Church’s Desolation.mxl","588":"O Turn to Us, Good Lord.mxl","589":"Forgive Our Sins.mxl","590":"Wilt Thou Forgive.mxl","591":"Forgive Me, Father.mxl","592":"View Me, Lord, a Work of Thine.mxl","593":"Hold Thou My Hands!.mxl","594":"Holy Father, Hear My Cry.mxl","595":"O Day of God, Draw Nigh.mxl","596":"O God of Earth and Altar.mxl","597":"Judge Eternal, Throned in Splendor.mxl","598":"Jesus, My Only Hope.mxl","599":"I Will Arise and Go to Jesus.mxl","600":"Blessed Jesus, at Thy Word.mxl","601":"Eternal Father, Strong to Save.mxl","602":"Give Me Jesus.mxl","603":"Take Thou My Hand, O Father.mxl","604":"I Want Jesus to Walk with Me.mxl","605":"O God, Thou Faithful God.mxl","606":"Lord, Teach Us How to Pray Aright.mxl","607":"O God, Forsake Me Not.mxl","608":"Kindle, Savior, in My Heart.mxl","609":"Speak, O Lord.mxl","610":"Lord, Thee I Love with All My Heart.mxl","611":"Oh, Let My Name Engraven Stand.mxl","612":"Be Thou My Vision SATB.mxl","613":"Savior, Like a Shepherd Lead Us.mxl","614":"O Word of God Incarnate.mxl","615":"Heed Me or I Die.mxl","616":"I Need Thee Every Hour.mxl","617":"O Gracious Lord, with Love Draw Near.mxl","618":"God of Eternal Love ST. BETHANY.mxl","619":"Broad Is the Road That Leads to Death.mxl","620":"Lord, Dismiss Us with Your Blessing.mxl","621":"May God Bestow on Us ES WOLLE.mxl","622":"Love Divine, All Loves Excelling.mxl","623":"Lead Me, Lord.mxl","624":"Hear, O Smith of Heavens.mxl","625":"Jesus, Savior, Pilot Me.mxl","626":"More Love to Thee, O Christ.mxl","627":"Christ, Whose Glory Fills the Skies.mxl","628":"Nearer, My God, to Thee.mxl","629":"Rock of Ages, Cleft for Me TOPLADY.mxl","630":"Rock of Ages, Cleft for Me NEW CITY.mxl","631":"God Moves in a Mysterious Way MYSTERIOUS.mxl","632":"God Moves in a Mysterious Way UNION.mxl","633":"My Lord with His Affliction.mxl","634":"As the Deer.mxl","635":"Give to the Winds Thy Fears.mxl","636":"Whate'er My God Ordains.mxl","637":"He Will Hold Me Fast.mxl","638":"Savior and Friend.mxl","639":"In the Hour of Trial.mxl","640":"Trust and Obey.mxl","641":"Lift Thy Head, O Zion, Weeping.mxl","642":"May the Mind of Christ My Savior.mxl","643":"Lord, Keep Us Steadfast in Thy Word.mxl","644":"I Said, Must I Dwell (Song of Hezekiah).mxl","645":"How Firm a Foundation.mxl","646":"Jesus, Priceless Treasure.mxl","647":"O Little Flock, Fear Not the Foe.mxl","648":"Be Still, My Soul.mxl","649":"Guide Me, O Thou Great Jehovah.mxl","650":"God of Our Life.mxl","651":"Once More, My Soul.mxl","652":"Be with Me, Lord.mxl","653":"My Misery and Homelessness.mxl","654":"Children of the Heavenly Father.mxl","655":"Gently, Lord, O Gently Lead Us.mxl","656":"My Thoughts, That Often Mount CALVARY.mxl","657":"Why Should Vain Mortals HEROISM.mxl","658":"And Must This Body Die MARYLAND.mxl","659":"There Is a Land of Pure Delight.mxl","660":"On Jordan's Stormy Banks I Stand BOUND.mxl","661":"When I Can Read My Title Clear.mxl","662":"Immanuel’s Land.mxl","663":"How Bright These Glorious FOREST GREEN.mxl","664":"Who Shall the Lord's Elect BRIDGEWATER.mxl","665":"Let Christian Faith and Hope Dispel.mxl","666":"If God Is on Our Side.mxl","667":"If Thou but Suffer God to Guide Thee.mxl","668":"The God of Abraham Praise.mxl","669":"Oh, the Deep, Deep Love of Jesus.mxl","670":"Gone Is the Bridegroom.mxl","671":"God of Our Fathers.mxl","672":"Who Puts His Trust.mxl","673":"Who Trusts in God, a Strong Abode.mxl","674":"The Beatitudes.mxl","675":"The Beatitudes - Erb prose.mxl","676":"Blest Are the Contrite Hearts.mxl","677":"The Fear of the Lord.mxl","678":"A Mighty Fortress Is Our God rhythmic.mxl","679":"A Mighty Fortress Is Our God standard.mxl","680":"Come, Come, Ye Saints.mxl","681":"Come, Thou Fount.mxl","682":"I Will Sing My Maker's Praises.mxl","683":"God Is My Strong Salvation.mxl","684":"On Christ, the Solid Rock FUNDAMENTUM.mxl","685":"My Hope Is Built on Nothing Less.mxl","686":"My Anchor Holds.mxl","687":"Blessed Assurance, Jesus Is Mine.mxl","688":"O Thou, in Whose Presence.mxl","689":"In the Rifted Rock I’m Resting.mxl","690":"Before the Throne of God Above.mxl","691":"In Christ Alone.mxl","692":"Jesus, I Am Resting, Resting.mxl","693":"Thou Hidden Source of Calm Repose.mxl","694":"Oh, Safe to the Rock.mxl","695":"Marvelous Grace.mxl","696":"Jesus Loves Me.mxl","697":"My Hope Is in the Lord.mxl","698":"No Other Plea.mxl","699":"Oh, What Is Your Comfort.mxl","700":"How Sweet the Name of Jesus Sounds.mxl","701":"That Cause Can Neither.mxl","702":"There Is a Balm in Gilead.mxl","703":"Hallelujah!.mxl","704":"You Are My Hiding Place.mxl","705":"Have You Not Known.mxl","706":"Christ, Who Knows All His Sheep.mxl","707":"My Heart Is Longing.mxl","708":"And Can It Be.mxl","709":"Thou True Vine, That Heals.mxl","710":"O Jesus, I Have Promised.mxl","711":"'Tis Not that I Did Choose (Strawbridge).mxl","712":"The Law of God Is Pleasant Food.mxl","713":"What a Friend We Have in Jesus.mxl","714":"God Is Love- His Mercy Brightens.mxl","715":"Near the Cross.mxl","716":"Not All the Blood of Beasts.mxl","717":"It Is Well.mxl","718":"Now Shall My Inward Joys Arise 2sys.mxl","719":"I Greet Thee, Who GENEVAN 93.mxl","720":"I Greet Thee, Who LONGWOOD.mxl","721":"The Law of God Is Good and Wise.mxl","722":"I Heard the Voice of Jesus Say.mxl","723":"I Know Whom I Have Believed.mxl","724":"A Debtor to Mercy Alone.mxl","725":"I Know That My Redeemer Lives SHOUT ON.mxl","726":"Jesus! What a Friend for Sinners.mxl","727":"Jesus, Thy Boundless Love to Me.mxl","728":"Ah, Jesus Lord, Thy Love to Me.mxl","729":"What Wondrous Love Is This.mxl","730":"Oh, That I Had a Thousand Voices.mxl","731":"Jesus, Lover of My Soul.mxl","732":"On Merit Not My Own.mxl","733":"How Deep the Father's Love for Us.mxl","734":"In the Cross Alone I Glory.mxl","735":"Father, I Know That All My Life.mxl","736":"Amazing Grace!.mxl","737":"We Rest on Thee.mxl","738":"In God, My Faithful God.mxl","739":"Happy Are They.mxl","740":"Jesus Lives, and So Shall I.mxl","741":"Jesus, Faithful Friend.mxl","742":"If I Can Speak with Tongues of Fire.mxl","743":"Jesus, the Very Thought WHITEOAK.mxl","744":"What, Ye Ask Me, Is My Prize.mxl","745":"It Is a Gift Most Wonderful.mxl","746":"I Sought the Lord FAITH (Moyer).mxl","747":"All My Hope on God Is Founded.mxl","748":"Firmly I Believe and Truly.mxl","749":"Like a River Glorious.mxl","750":"My Faith Looks Up to Thee.mxl","751":"I Am Not Skilled to Understand.mxl","752":"My Jesus, I Love Thee.mxl","753":"He Leadeth Me.mxl","754":"I Surrender All.mxl","755":"In Jesus' Name We Pray.mxl","756":"At the Lamb's High Feast We Sing SONNE DER.mxl","757":"At the Lamb's High Feast We Sing SALZBURG.mxl","758":"Soul, Adorn Thyself with Gladness.mxl","759":"And Now, O Father, Mindful.mxl","760":"Beneath the Blood-Stained Lintel.mxl","761":"Hail, Thou Once-Despised Jesus!.mxl","762":"Now, My Tongue, the Mystery Telling.mxl","763":"As the Disciples, When.mxl","764":"Only-Begotten, Word of God Eternal.mxl","765":"Jesus Christ, Our Blessed Savior.mxl","766":"How Sweet and Awful Is the Place.mxl","767":"Word and Water, Bread and Wine COWPER.mxl","768":"Arise, My Soul, Arise LENOX.mxl","769":"Arise, My Soul, Arise SUOMI.mxl","770":"Author of Life Divine.mxl","771":"Come, O Thou Traveler VERNON.mxl","772":"Come, My Way, My Truth, My Life.mxl","773":"Thee We Adore, O Hidden Savior.mxl","774":"We Come as Guests Invited.mxl","775":"Father, We Thank Thee Who Hast Planted.mxl","776":"There Is a Fountain (Young).mxl","777":"Let Us Love and Sing and Wonder.mxl","778":"One There Is, above All Others.mxl","779":"From Every Stormy Wind That Blows.mxl","780":"O Bread of Life from Heaven.mxl","781":"My Song Is Love Unknown.mxl","782":"O God of Bethel, by Whose Hand.mxl","783":"Our Only Paschal Lamb.mxl","784":"God and Man at Table 4sys.mxl","785":"Alleluia, Alleluia! Give Thanks.mxl","786":"O Lord, We Praise Thee.mxl","787":"Jesus, Thy Blood and Righteousness.mxl","788":"Jesus, Thou Joy of Loving Hearts.mxl","789":"He Who Would Valiant Be.mxl","790":"Who Would True Valor See.mxl","791":"O Brother Man, Fold to Your Heart.mxl","792":"Let Your Heart Be Broken.mxl","793":"Because I Have Been Given Much.mxl","794":"I Bind unto Myself Today.mxl","795":"God Be in My Head (Davies).mxl","796":"God Be in My Head (Nicholson).mxl","797":"Onward, Christian Soldiers.mxl","798":"Stand Up, Stand Up for Jesus.mxl","799":"Who Is on the Lord's Side.mxl","800":"Seek Ye First.mxl","801":"O Zion, Haste, Your Mission.mxl","802":"Hark! The Voice of Jesus Calling.mxl","803":"God Send Us Men.mxl","804":"Strong Son of God.mxl","805":"Come, Labor On.mxl","806":"Rise, My Soul, To Watch and Pray.mxl","807":"O Great God.mxl","808":"To the Word.mxl","809":"Rise Up, O Men of God!.mxl","810":"Forth in Thy Name, O Lord, I Go.mxl","811":"Take My Life, and Let It Be.mxl","812":"Jesus Calls Us.mxl","813":"To Live Is Christ.mxl","814":"Father, I Wait CHILD OF THINE.mxl","815":"Father, I Adore You.mxl","816":"Shout, for the Blessed Jesus Reigns.mxl","817":"Arm of the Lord, Awake, Awake!.mxl","818":"Crown Him with Many Crowns.mxl","819":"God Is Working His Purpose Out.mxl","820":"Trumpet of God, Sound High.mxl","821":"Hark! Ten Thousand Harps and Voices.mxl","822":"Hail to the Lord's Anointed CRUGER.mxl","823":"On the Shoulders of Our Priest.mxl","824":"Hark! How the GOSPEL TRUMPET.mxl","825":"Ye Choirs of New Jerusalem NORTHFIELD.mxl","826":"Lift High the Cross.mxl","827":"The Lord Is King!.mxl","828":"The Trees of the Field.mxl","829":"All Heaven Waits ALT.mxl","830":"I Will Sing to Yahweh (Song of Miriam).mxl","831":"I'll Sing the Praises of the LORD (Song of Miriam).mxl","832":"See, the Conqueror Mounts in Triumph.mxl","833":"When in Our Music God Is Glorified.mxl","834":"All Praise to Thee, for Thou, O King.mxl","835":"Look, Ye Saints, the Sight HELMSLEY.mxl","836":"Lo! He Comes WESTMINSTER ABBEY.mxl","837":"Jesus Is King.mxl","838":"At the Name of Jesus.mxl","839":"Lo, Round the Throne.mxl","840":"O Church, Arise.mxl","841":"Before the Lord We Bow.mxl","842":"Babylon Is Fallen.mxl","843":"Captain of Israel's Host stand harm.mxl","844":"Hear the Royal Proclamation.mxl","845":"When the Enemy Comes In unison.mxl","846":"I Love Thy Kingdom, Lord.mxl","847":"Mighty Lord, Extend Your Kingdom.mxl","848":"Behold! The Mountain of the LORD.mxl","849":"Rejoice, the Lord Is King.mxl","850":"Alleluia (Kou).mxl","851":"The Head That Once Was Crowned.mxl","852":"All Authority and Power.mxl","853":"Lead on, O King Eternal.mxl","854":"Sun of Unclouded Righteousness.mxl","855":"Savior of the Nations, Come.mxl","856":"Break Forth, O Beauteous Heavenly Light.mxl","857":"Wake, Awake, for Night Is Flying.mxl","858":"How Lovely Shines the Morning Star!.mxl","859":"O Savior, Rend the Heavens.mxl","860":"Hills of the North, Rejoice.mxl","861":"From East to West, from Shore to Shore.mxl","862":"Creator of the Stars of Night.mxl","863":"Let All Mortal Flesh Keep Silence.mxl","864":"Hark! A Thrilling Voice Is Sounding.mxl","865":"Let All Together Praise Our God.mxl","866":"The Lord at First Did Adam Make.mxl","867":"The Race That Long.mxl","868":"Thou Who Wast Rich QUELLE.mxl","869":"The Angel Gabriel.mxl","870":"O Bride of Christ, Rejoice!.mxl","871":"Comfort, Comfort Ye My People.mxl","872":"Brightest and Best of the Sons (Hickok).mxl","873":"Come, Thou Long-Expected Jesus.mxl","874":"Day of Wrath shrunk.mxl","875":"Day of Judgment! Day of Wonders!.mxl","876":"Behold the Bridegroom Cometh.mxl","877":"Rejoice, All Ye Believers.mxl","878":"O Come, Divine Messiah.mxl","879":"Darkness Disappeareth.mxl","880":"O Come, O Come, Emmanuel.mxl","881":"Lift Up Your Heads TRURO.mxl","882":"Lift Up Your Heads MACHT HOCH.mxl","883":"On Jordan's Bank the Baptist's Cry ALSTONE.mxl","884":"Hark the Glad Sound COMMUNION.mxl","885":"See, Thy King Cometh.mxl","886":"While Shepherds Watched HANDEL.mxl","887":"Alleluia! Born Is the King.mxl","888":"While Shepherds Watched OTFORD.mxl","889":"The Babe in Bethlehem's Manger SHERBURNE.mxl","890":"Ye Nations All, on You I Call.mxl","891":"A Virgin Conceived JUDEA.mxl","892":"Angels We Have Heard on High.mxl","893":"Hark! The Herald Angels Sing.mxl","894":"Good People All unison.mxl","895":"I Heard the Bells CHRISTMAS BELLS.mxl","896":"I Heard the Bells WALTHAM.mxl","897":"Joy to the World!.mxl","898":"On Christmas Night.mxl","899":"The First Noel.mxl","900":"Lo, How a Rose E'er Blooming.mxl","901":"On This Day, Earth Shall Ring.mxl","902":"What Child Is This.mxl","903":"O Little Town of Bethlehem.mxl","904":"O Come, All Ye Faithful.mxl","905":"It Came upon the Midnight Clear.mxl","906":"Good Christian Men, Rejoice.mxl","907":"O Holy Night.mxl","908":"Songs of Praise the Angels Sang.mxl","909":"Of the Father's Love Begotten.mxl","910":"While the World Awaited.mxl","911":"God Rest Ye Merry, Gentlemen.mxl","912":"Sing We Now of Christmas.mxl","913":"Away in a Manger MUELLER.mxl","914":"Away in a Manger CRADLE SONG.mxl","915":"O Jesus Christ, Thy Manger Is.mxl","916":"Silent Night, Holy Night 6st.mxl","917":"A Boy Was Born in Bethlehem (Praetorius).mxl","918":"All My Heart This Night Rejoices.mxl","919":"Gabriel's Message Does Away.mxl","920":"Angels, from the Realms of Glory.mxl","921":"Once in Royal David's City.mxl","922":"From Heaven above to Earth I Come.mxl","923":"Unto Us a Boy Is Born.mxl","924":"As with Gladness Men of Old.mxl","925":"When Christ's Appearing Was 2sys.mxl","926":"This Little Babe (Britten).mxl","927":"'Round the Earth a Message Runs.mxl","928":"In Bethlehem Long Years Ago.mxl","929":"Let All the Stars in the Skies DW.mxl","930":"Long Ago and Far Away.mxl","931":"Earth Today Rejoices.mxl","932":"Arise and Shine in Splendor.mxl","933":"Now Praise We Christ, the Holy One.mxl","934":"There Was Joy in Heaven.mxl","935":"In Stature Grows.mxl","936":"Lord, Enthroned in Heavenly Splendor.mxl","937":"O Love, How Deep, How Broad.mxl","938":"Jesus, Good above All Other.mxl","939":"O Wondrous Type! O Vision Fair.mxl","940":"Who Is This, So Weak and Helpless.mxl","941":"O Christ, You Walked EVENING SHADE.mxl","942":"Lord, Who Throughout These Forty.mxl","943":"Forty Days and Forty Nights.mxl","944":"Prepare the Way, O Zion.mxl","945":"Ride On, Ride On KING'S MAJESTY.mxl","946":"Ride On, Ride On WINCHESTER NEW.mxl","947":"Come, Thou Precious Ransom, Come.mxl","948":"All Glory, Laud, and Honor.mxl","949":"Sing Hosanna.mxl","950":"O Sacred Head, Now Wounded.mxl","951":"O Lamb of God Most Holy.mxl","952":"Hark, the Voice of Love and Mercy.mxl","953":"Stricken, Smitten, and Afflicted.mxl","954":"Behold the Lamb of God 3sys.mxl","955":"When I Survey the Wondrous Cross.mxl","956":"Throned upon the Awful Tree.mxl","957":"Lamb of God.mxl","958":"Come, Sinners, View.mxl","959":"Ah, Holy Jesus, How Hast.mxl","960":"A Lamb Goes Uncomplaining Forth.mxl","961":"When Jesus Wept.mxl","962":"At the Cross, Her Station Keeping Mainz.mxl","963":"At the Cross, Her Station Keeping GRIM DEATH.mxl","964":"Alas! and Did My Savior MARTYRDOM.mxl","965":"Man of Sorrows! What a Name.mxl","966":"Let Thy Blood in Mercy Poured.mxl","967":"Beneath the Cross of Jesus.mxl","968":"Christ, the Life of All the Living.mxl","969":"Sing, My Tongue, the Glorious Battle.mxl","970":"John 3 16.mxl","971":"Christ the Lord is Risen Again.mxl","972":"Christ the Lord Is Risen Today.mxl","973":"Come, Ye Faithful, Raise the Strain.mxl","974":"Christ Jesus Lay in Death’s Strong Bands.mxl","975":"Now Let the Vault of Heaven Resound.mxl","976":"Thine Is the Glory.mxl","977":"The Power of the Cross.mxl","978":"See, What a Morning.mxl","979":"Lift Your Glad Voices.mxl","980":"Triumphant Jesus Bore the Cross.mxl","981":"O Sons and Daughters, Let Us Sing!.mxl","982":"Ye Sons and Daughters of the King.mxl","983":"Thou Hallowed Chosen Morn.mxl","984":"Alleluia! Alleluia!.mxl","985":"Christ Arose.mxl","986":"This Joyful Eastertide.mxl","987":"The Day of Resurrection.mxl","988":"See, from the Dungeon.mxl","989":"He's Risen, He's Risen, Christ Jesus.mxl","990":"Jesus Lives! Thy Terrors Now.mxl","991":"That Easter Day with Joy Was Bright.mxl","992":"Alleluia! The Strife Is O'er.mxl","993":"Lift Up, Lift Up Your Voices Now.mxl","994":"God Is Ascended up on High.mxl","995":"Hail Thee, Festival Day!.mxl","996":"I Sing My Savior’s Wondrous Death.mxl","997":"Who Is This That Comes from Far.mxl","998":"O Enter, Lord, Thy Temple.mxl","999":"Christ Is Risen, Christ Ascended.mxl","1000":"Christ, Exalted o'er the Angels ALT.mxl","1001":"Hail the Day That Sees Him Rise.mxl","1002":"Alleluia! Sing to Jesus!.mxl","1003":"Where High the Heavenly Temple Stands.mxl","1004":"Thy Strong Word.mxl","1005":"Come, Holy Ghost, Our Souls Inspire.mxl","1006":"Come, Holy Ghost, God and Lord.mxl","1007":"For Your Gift of God the Spirit.mxl","1008":"Holy Spirit, Ever Dwelling.mxl","1009":"We Now Implore God.mxl","1010":"O Splendor of God’s Glory Bright.mxl","1011":"O Spirit of Life, O Spirit of God.mxl","1012":"O Thou Who Camest from Above.mxl","1013":"Rejoice! The Year upon Its Way 2sys.mxl","1014":"Come Down, O Love Divine.mxl","1015":"Spirit Divine, Attend Our Prayers.mxl","1016":"Thou, Whose Purpose Is to Kindle.mxl","1017":"Oh, for That Flame of Living Fire 2sys.mxl","1018":"When Christ Our Lord Had Passed.mxl","1019":"Behold the Host Arrayed.mxl","1020":"Give Me the Wings of Faith.mxl","1021":"Thy Hand, O God, Hast Guided.mxl","1022":"The Church’s One Foundation.mxl","1023":"The Son of God Goes Forth.mxl","1024":"Rise Again, Ye Lion-Hearted.mxl","1025":"From All Thy Saints in Warfare.mxl","1026":"Built on the Rock the Church Doth Stand.mxl","1027":"Blessed City, Heavenly Salem.mxl","1028":"Blest Be the Tie That Binds.mxl","1029":"Faith of Our Fathers! Living Still.mxl","1030":"Christ Is Made the Sure Foundation.mxl","1031":"For All the Saints.mxl","1032":"We Thank You.mxl","1033":"We Plow the Fields and Scatter.mxl","1034":"Sing to the Lord of Harvest.mxl","1035":"Great Is Thy Faithfulness.mxl","1036":"Praise to God, Immortal Praise.mxl","1037":"Lord, Should Rising Whirlwinds Tear.mxl","1038":"Come, Ye Thankful People, Come.mxl","1039":"Now Thank We All Our God.mxl","1040":"Praise, O Praise the Lord of Harvest.mxl","1041":"Praise We Now the God of Heaven CORONAE.mxl","1042":"We Gather Together.mxl","1043":"Let All Things Now Living.mxl","1044":"Thank the Lord and Sing His Praise.mxl","1045":"Yet I Will Rejoice - Hab 3 Erb prose.mxl","1046":"To Jordan Came Our Lord.mxl","1047":"Ye Baptized People, One and All.mxl","1048":"All Christians Who Have Been Baptized.mxl","1049":"Baptized into Thy Name Most Holy.mxl","1050":"God's Own Child, I Gladly Say It.mxl","1051":"He That Believes and Is Baptized.mxl","1052":"The Day Thou Gavest, Lord.mxl","1053":"Lord, Let Our Evening Prayer Ascend.mxl","1054":"Now Rest Beneath Night's Shadow.mxl","1055":"The Day Is Past and Gone EVENING HYMN.mxl","1056":"Abide with Me— Fast Falls.mxl","1057":"Now the Day Is Over.mxl","1058":"On the Wings of Light.mxl","1059":"Ere I Sleep.mxl","1060":"God, That Madest Earth and Heaven.mxl","1061":"All Praise to Thee, My God.mxl","1062":"Create in Me a Clean Heart (Freylinghausen).mxl","1063":"The Sacrifices of God.mxl","1064":"Kyrie (NCG).mxl","1065":"Kyrie (JBJ).mxl","1066":"Kyrie Echo.mxl","1067":"Franklin Kyrie.mxl","1068":"Kyrie (plainchant).mxl","1069":"Kyrie (Tallis).mxl","1070":"Kyrie (Tallis) 2.mxl","1071":"Gloria in Excelsis (Decius).mxl","1072":"Gloria Round.mxl","1073":"Franklin Gloria.mxl","1074":"Gloria Patri (Greatorex).mxl","1075":"Gloria Patri (Meineke).mxl","1076":"Doxology.mxl","1077":"Praise God from Whom All Blessings Flow.mxl","1078":"Halleluyah! JBJ.mxl","1079":"Amen! Blessing and Glory.mxl","1080":"You Shall Love the LORD.mxl","1081":"That Man a Godly Life Might Live.mxl","1082":"Hear How the LORD.mxl","1083":"No Other Gods.mxl","1084":"The Nicene Creed piano.mxl","1085":"The Apostles Creed (Reagan).mxl","1086":"The Apostles Creed (Soles).mxl","1087":"We All Believe in One True God.mxl","1088":"I Believe in God the Father.mxl","1089":"The Creed of Chalcedon.mxl","1090":"We All Believe ASSURANCE.mxl","1091":"Bring Ye All the Tithes.mxl","1092":"He Which Soweth Sparingly.mxl","1093":"Offertory Sentence (Tallis).mxl","1094":"Cast Thy Bread upon the Waters.mxl","1095":"Magnificat (chant).mxl","1096":"Magnificat (Boyd).mxl","1097":"Tell Out, My Soul.mxl","1098":"My Soul Does Magnify.mxl","1099":"My Soul Now Magnifies.mxl","1101":"Sanctus (plainchant).mxl","1102":"Franklin Sanctus.mxl","1103":"Sanctus (Kou).mxl","1104":"Sanctus (JBJ).mxl","1105":"Sanctus (Schubert).mxl","1106":"Sanctus (Tallis).mxl","1107":"The Lord's Prayer (ancient).mxl","1108":"The Lord's Prayer (Kedrov).mxl","1109":"The Lord's Prayer (Wilbur).mxl","1110":"The Lord's Prayer (Stone).mxl","1111":"Our Father God, Who Art.mxl","1112":"Agnus Dei (Tallis).mxl","1113":"Franklin Agnus Dei.mxl","1114":"Agnus Dei (Merbecke).mxl","1115":"Agnus Dei (Fryxell).mxl","1116":"Benedictus (Norris).mxl","1117":"Benedictus (Turle).mxl","1118":"Blest Be the God of Israel.mxl","1119":"Now Bless the God of Israel.mxl","1120":"Nunc Dimittis (Tallis).mxl","1121":"O Lord and Master, Thou.mxl","1122":"Nunc Dimittis (plainchant).mxl","1123":"Lord, Bid Your Servant.mxl","1124":"May Our God, Sovereign Lord text.mxl","1125":"Shalom, My Friends.mxl","1126":"The Blessing of Aaron.mxl","1127":"Benediction and Blessing.mxl","1128":"May the Grace of Christ.mxl","1129":"May the Peace of God.mxl","1130":"God Be with You Till We Meet (Tomer).mxl","1131":"God Be with You Till We Meet (RVW).mxl","1132":"Prayer before Meal.mxl","1133":"Prayer after Meal.mxl","1134":"Proclamation of the Faith.mxl","1135":"Feed Your Children.mxl","1100a":"Sursum Corda - Preface.mxl"};
@@ -8566,12 +8548,11 @@ let hymnPlayback = null; // { sampler, num }
 /* Barlines are the one place every part is guaranteed to line up, so note
    times are collected per measure — a measure index plus an offset inside
    that measure — and only turned into absolute time once every part has been
-   read. Running one continuous cursor per part (what this used to do) drifts
-   the moment a voice stops short of the barline: an inner alto written as a
-   plain half note in a dotted-half bar, with no closing rest, left that whole
-   staff a beat early from there to the end of the hymn, which is how treble
-   and bass came apart partway through 211 Let God Arise in All His Might (and
-   ~40 other files). Offsets are kept in quarter notes rather than raw
+   read. One continuous cursor per part would drift the moment a voice stops
+   short of the barline: an inner alto written as a plain half note in a
+   dotted-half bar, with no closing rest, would leave that whole staff a beat
+   early from there to the end of the hymn (211 Let God Arise in All His Might
+   and ~40 other files are written this way). Offsets are kept in quarter notes rather than raw
    <divisions> ticks so parts with different divisions — or a divisions change
    mid-piece — still land on one shared clock. */
 function parseMusicXML(xmlText){
@@ -8841,7 +8822,7 @@ function stopHymnAudio(){
 /* ---------------------------------------------------------------------
    Planner columns — user-customizable (add/remove/rename columns and
    movements, reorder), persisted per-browser (and shared like the other
-   settings, once signed in). DEFAULT_SCHEDULE_COLUMNS is only the seed
+   settings, once signed in). The default column sets below are only the seed
    used the very first time a browser opens the Planner; after that,
    scheduleColumns (loaded from storage) is the live source of truth.
    Columns beyond these defaults are Planner-only fields — they won't
@@ -8879,7 +8860,7 @@ const PILLAR_DEFAULT_SCHEDULE_COLUMNS = [
    skeleton new users land on) column-for-column — every scheduleKey
    used by an element in DEFAULT_TEMPLATE has a matching column here, in
    the same movement order, so a new user's Planner and Builder actually
-   line up out of the box. It's still noticeably leaner than Pillar's own
+   line up out of the box. It's noticeably leaner than Pillar's own
    21-column set: no Lectionary Reader or second Communion
    hymn, since DEFAULT_TEMPLATE doesn't use those. Users can still add,
    rename, and reorder columns freely via the column picker or by
@@ -8946,10 +8927,8 @@ function loadScheduleColumns(){
   // the lean generic seed — but if this is Pillar's own browser (known
   // by its already-saved churchName), fall back to Pillar's real
   // 21-column layout instead, not the generic one. Without this check,
-  // Pillar's account looks identical to a fresh guest the moment this
-  // browser has no local scheduleColumnsConfig saved (e.g. right after
-  // this default-column split shipped, since Pillar had never actually
-  // triggered an edit that would have saved one).
+  // Pillar's account would look identical to a fresh guest on any browser
+  // with no local scheduleColumnsConfig saved.
   if(isPillarChurchName(localStorage.getItem('churchName'))){
     return PILLAR_DEFAULT_SCHEDULE_COLUMNS.map(c => ({ ...c }));
   }
@@ -8994,18 +8973,16 @@ function handleScheduleHeaderPaste(event){
   document.execCommand('insertText', false, text);
 }
 let scheduleColumns = loadScheduleColumns();
-/* forcePillarScheduleColumnsRestoreOnce — one-time correction, dated so
-   it only ever runs once per browser. The generic/Pillar column split
-   left a window where Pillar's browser could have had the WRONG
-   (generic-based) column set written into localStorage and/or Supabase
-   as if it were real saved data — e.g. via any rename/add/reorder/CSV
-   import action calling saveScheduleColumns() while scheduleColumns was
-   sitting on the generic fallback. Once that happens, the normal "has a
-   real save" path (both the local check in loadScheduleColumns and the
-   cloud check in pullSharedDataOnSignIn) treats that bad data as
-   legitimate forever, since there's no way to tell a real 9-column
-   custom setup from an accidental one from the data shape alone. This
-   runs once, and only overwrites if the current set is actually missing
+/* forcePillarScheduleColumnsRestoreOnce — one-time correction, keyed by
+a dated flag so it runs once per browser. A Pillar browser can have the
+WRONG (generic-based) column set saved in localStorage and/or Supabase
+as if it were real data — e.g. from a rename/add/reorder/CSV import
+while scheduleColumns was sitting on the generic fallback. The normal
+"has a real save" checks (locally in loadScheduleColumns, and on
+sign-in in pullSharedDataOnSignIn) would treat that as legitimate
+forever, since there's no way to tell a real 9-column custom setup
+from an accidental one from the data shape alone. This runs once,
+and only overwrites if the current set is actually missing
    Pillar-only columns (lectionaryReader / hymn6 / hymn7) — i.e. it looks
    like the generic seed, not a real intentional edit. */
 (function forcePillarScheduleColumnsRestoreOnce(){
@@ -9114,11 +9091,9 @@ function loadSchedule(){
   // real baptisms/baby blessings/new members) is intentionally NOT
   // auto-loaded here. It's real church data, not generic template content,
   // so it shouldn't land in a first-time visitor's browser automatically
-  // the way the (generic) Pillar liturgy template does. Existing browsers
-  // that already have 'scheduleSeeded'==='v1' set (i.e. Pillar's own
-  // devices, seeded before this change) keep their already-saved
-  // liturgySchedule untouched — this only changes what happens on a
-  // browser that's never seen this app before. SCHEDULE_SEED_DATA itself
+  // the way the (generic) Pillar liturgy template does. A browser that
+  // already has a saved liturgySchedule (Pillar's own devices) keeps it
+  // untouched. SCHEDULE_SEED_DATA itself
   // is left in the file, unused, in case Pillar wants it restored later.
   //
   // For a genuinely brand-new browser (no liturgySchedule saved at all —
@@ -9548,7 +9523,7 @@ async function createNewServiceFromPanel(){
 
   document.getElementById('serviceDate').value = dateStr;
   await onDateChange(); // must finish (and replace `state`) before performAutosave reads it below —
-                        // calling this without awaiting let autosave capture the previous service's
+                        // without awaiting, autosave would capture the previous service's
                         // still-in-memory state and save it under the new date instead of a fresh template
   performAutosave();
   closeServicesPanel();
@@ -9933,7 +9908,7 @@ async function applyScheduleForDate(dateStr){
 
   // Fetch ESV text one reference at a time (never in parallel) — firing several
   // requests to Crossway's API at once risks tripping their rate limit, which
-  // was making every fetch fail, not just the schedule-triggered ones.
+  // makes every fetch fail, not just the schedule-triggered ones.
   for(const t of fetchTargets){
     if(t.key) await autoFetchEsvForReading(t.id, t.key, true);
     else await autoFetchEsvForElement(t.id, true);
@@ -9958,8 +9933,8 @@ function loadLiturgyArchive(){
 }
 let lastSavedSnapshotJSON = null;
 /* ---------------------------------------------------------------------
-   Phase 2 of the collaboration/assignment feature: derive who's
-   "assigned" to a liturgy from the minister picks that already exist on
+   Who's "assigned" to a liturgy comes from the minister picks that
+   already exist on
    every element and movement default — no separate assignment step,
    since picking someone as the minister for a piece of the service
    already is assigning them (movement defaults and element-level

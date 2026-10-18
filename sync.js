@@ -25,8 +25,9 @@
    A change ("op") names its target by path: field names, plus
    {field, id} steps for items in lists that have an identity field
    (elements by uid, movements by key, sections/readings by key,
-   variants by id, resource links by label). Lists without one — plain values like names — are
-   compared by membership, or replaced whole if reordered.
+   variants by id, resource links by label). Lists without one — plain
+   values like names — are compared by membership, or replaced whole if
+   reordered.
      set / unset   a field's new value, or its removal. A new object
                    (`fresh`: nothing there in the baseline, like a
                    Planner row) merges into one someone else added at
@@ -202,7 +203,7 @@ function syncNormalizeService(snap){
 }
 
 /* =====================================================================
-   Service sync (moved from index.html)
+   Service sync
    ===================================================================== */
 /* ---------------------------------------------------------------------
    Whole-copy merge — the fallback for saves with no baseline (a liturgy
@@ -258,9 +259,9 @@ function ensureElementUids(movements, fresh){
 }
 function mergeObjectArrayByIdentity(cloudArr, localArr, baseArr){
   // Items with a `uid` pair by it. An item whose uid isn't on another side
-  // is new there — unless that side has an item with no uid yet (saved by
-  // a browser still running older code) that matches the old way, in
-  // which case they pair the old way (by schedule link / type + title).
+  // is new there — unless that side has an item with no uid (saved before
+  // elements had uids) that matches by schedule link or type + title, in
+  // which case they pair that way.
   const sides = [cloudArr, localArr, Array.isArray(baseArr) ? baseArr : []];
   const uidSets = sides.map(arr => new Set(arr.filter(v => v && v.uid).map(v => v.uid)));
   const uidlessSigs = sides.map(arr => new Set(arr.filter(v => v && !v.uid).map(objectMergeSignature).filter(sig => sig !== null)));
@@ -285,7 +286,7 @@ function mergeObjectArrayByIdentity(cloudArr, localArr, baseArr){
   const cloudBySig = bucketBySig(cloudArr, 0);
   const baseBySig = Array.isArray(baseArr) ? bucketBySig(baseArr, 2) : null;
   // How many items sharing this identity should survive. With no base,
-  // keep them all (old behavior). With a base, items one side removed
+  // keep them all. With a base, items one side removed
   // since the base are subtracted — but never below what both sides
   // still have, and never above what either side has.
   const keepCount = sig => {
@@ -326,12 +327,10 @@ function mergeObjectArrayByIdentity(cloudArr, localArr, baseArr){
     const idx = consumed.get(sig) || 0;
     if(idx < bucket.length && idx < keepCount(sig)){ entries.push({ item: bucket[idx], ci: -1, li: localArr.indexOf(bucket[idx]) }); consumed.set(sig, idx + 1); }
   });
-  // Order: the result used to always follow the cloud side, so moving an
-  // element never saved — the cloud's old order came straight back. Now
-  // it follows the local side (the side that wins conflicts) unless only
-  // the cloud side has been rearranged since the base (a teammate moved
-  // things and this side didn't). Items only the other side has go right
-  // after the item they followed there.
+  // Order: follows the local side (the side that wins conflicts), so a
+  // move made here saves — unless only the cloud side has been rearranged
+  // since the base (a teammate moved things and this side didn't). Items
+  // only the other side has go right after the item they followed there.
   const reorderedSinceBase = (arr, side) => {
     if(!baseBySig) return false;
     const seen = new Map();
@@ -404,7 +403,7 @@ function isBlankContent(v){
 // in — set when a service is opened from the cloud and after each
 // successful reconcile. It's what lets a merge tell "deleted here" apart
 // from "added elsewhere". Deep-copied so later edits to `state` can't
-// change it. No entry = no deletion tracking for that date (old behavior).
+// change it. No entry = no deletion tracking for that date.
 const liturgyCloudBase = {};
 function setLiturgyCloudBase(dateStr, data){
   if(!dateStr) return;
@@ -414,9 +413,9 @@ function setLiturgyCloudBase(dateStr, data){
   delete liturgyCloudBase[dateStr];
 }
 /* ---------------------------------------------------------------------
-   Conditional cloud writes. A plain read → merge → upsert let two devices
-   overlap: B reads, A saves, B writes back what it read — silently undoing
-   A's edit. This only lands the write if the row's updated_at is still
+   Conditional cloud writes. A plain read → merge → upsert would let two
+   devices overlap: B reads, A saves, B writes back what it read — silently
+   undoing A's edit. So this only lands the write if the row's updated_at is still
    what was read; if someone saved in between, it re-reads and merges
    again. A failed read throws — it never falls back to writing this
    device's copy unmerged. `mergeFn(cloudData)` gets undefined when the row
@@ -550,8 +549,8 @@ async function fetchAllServiceSnapshotsFromSupabase(){
 
 // What this browser last got into the cloud for the open service (or
 // loaded from it). While the Builder still matches it, there's nothing to
-// save — re-saving every tick only gave a stale copy more chances to
-// overlap a teammate's save — so the tick just checks for their edits.
+// save — re-saving every tick would only give a stale copy more chances
+// to overlap a teammate's save — so the tick just checks for their edits.
 let lastPushedSnapshotJSON = null;
 let liturgyPushQueuedJSON = null;
 let liturgyPushChain = Promise.resolve();
@@ -645,12 +644,11 @@ function performAutosave(){
     if(currentJSON === liturgyPushQueuedJSON) return; // already on its way
   }
   const assignedMinisters = computeAssignedMinisters(state);
-  // notifiedMinisters tracks who's already been caught up (Phase 4 will
-  // send a real notification and then update this list). Carry the prior
-  // value forward untouched so a name added later shows up as a genuine
-  // diff — but the FIRST time this field exists for a date, bootstrap it
-  // to the current assignments so Phase 2's rollout doesn't retroactively
-  // look like everyone was "just assigned" once Phase 4 ships.
+  // notifiedMinisters tracks who's already been caught up (the notification
+  // bell compares against it). Carry the prior value forward untouched so a
+  // name added later shows up as a genuine diff — but the FIRST time this
+  // field exists for a date, start it at the current assignments, so an
+  // existing service doesn't look like everyone was "just assigned".
   let notifiedMinisters = assignedMinisters;
   try{
     const prior = loadLiturgyArchive()[dateStr];
@@ -897,8 +895,8 @@ function loadSharedCloudBase(key){
   try{
     const saved = JSON.parse(localStorage.getItem('sharedCloudBase_' + key));
     if(saved && saved.userId === currentUser.id) return saved.data;
-    // The column layout's baseline from before this model, kept so the
-    // first sync after updating doesn't need the fallback.
+    // The column layout's baseline under its older storage key, which seeds
+    // this one so an existing browser's first sync doesn't need the fallback.
     if(key === 'scheduleColumnsConfig'){
       const old = localStorage.getItem('scheduleColumnsCloudBase');
       if(old) return JSON.parse(old);
