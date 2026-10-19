@@ -3,6 +3,14 @@
 Versions stay below 1.0.0 until the new sync design rolls out; that release will be 1.0.0.
 Last number for fixes, middle number for new features.
 
+## 1.0.2 — 2026-10-19
+
+- Switching to the Trinity Hymnal in the hymnal panel now shows its lyrics. Before, they appeared only after closing and reopening the panel.
+- A teammate's changes to a service now reach a device even if a box was left selected there, such as on an iPad. They arrive once the box has sat untouched for 15 seconds.
+- An open Planner now picks up teammates' changes and column edits on its own, about every 20 seconds and when you return to the app, instead of only when it was opened.
+- In Firefox, reloading no longer brings back the previous service's name in the title box.
+- Added scores for hymns 195 and 198, fixed misspelled score and recording file names, and removed recordings that matched no hymn.
+
 ## 1.0.1 — 2026-10-18
 
 The app loads faster: the three hymnals' song lists now live in their own files and download the first time a hymnal is opened, instead of with every page load. The page itself is about a third of its old size.

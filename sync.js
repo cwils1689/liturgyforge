@@ -720,10 +720,19 @@ async function pullLiturgyUpdates(dateStr){
    baseline. Skipped while a field is focused, so it never moves a
    cursor or eats a keystroke; it retries on the next tick.
 --------------------------------------------------------------------- */
+// A field counts as in use only while it has focus and was touched recently:
+// iPads keep a field focused after a tap elsewhere, which would otherwise
+// hold off a teammate's changes indefinitely.
+const FIELD_IDLE_MS = 15000;
+let lastFieldTouchAt = 0;
+function noteFieldTouched(){ lastFieldTouchAt = Date.now(); }
+document.addEventListener('input', noteFieldTouched, true);
+document.addEventListener('focusin', noteFieldTouched, true);
 function isActivelyEditingField(){
   const ae = document.activeElement;
   if(!ae) return false;
-  return ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT' || ae.isContentEditable;
+  if(!(ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT' || ae.isContentEditable)) return false;
+  return Date.now() - lastFieldTouchAt < FIELD_IDLE_MS;
 }
 function reconcileLiturgyFromCloud(dateStr, pushedMerged, baseBeforePush, cloudUpdatedAt){
   if(!pushedMerged || !pushedMerged.movements) return;
@@ -996,11 +1005,13 @@ async function pushBackupSharedData(key, data){
     return null;
   }
 }
-async function fetchAllSharedDataFromSupabase(){
+async function fetchAllSharedDataFromSupabase(keys){
   if(!sbClient || !currentUser) return {};
   const seqAtStart = sharedDocWriteSeq;
   try{
-    const { data, error } = await sbClient.from('shared_data').select('key, data');
+    let query = sbClient.from('shared_data').select('key, data');
+    if(keys) query = query.in('key', keys);
+    const { data, error } = await query;
     if(error || !data) return {};
     const result = {};
     data.forEach(row => { result[row.key] = row.data; });

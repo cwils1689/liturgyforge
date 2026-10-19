@@ -44,7 +44,7 @@ const ctx = {
 vm.createContext(ctx);
 vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'sync.js'), 'utf8'), ctx);
 // Top-level let/const in a script aren't properties of the context; expose what tests use.
-vm.runInContext('globalThis.__t = { syncDiff, syncApply, syncRebase, syncNormalizeService, syncSame, ensureElementUids, mergeAndWriteCloudRow, pushLiturgyToSupabase, cloudConfirmedDates, CLOUD_WRITE_SKIP, saveSharedDoc, takeInSharedDoc, fetchAllSharedDataFromSupabase, loadSharedCloudBase, retryPendingSharedDocs, pushBackupSharedData, SHARED_DOCS }', ctx);
+vm.runInContext('globalThis.__t = { syncDiff, syncApply, syncRebase, syncNormalizeService, syncSame, ensureElementUids, mergeAndWriteCloudRow, pushLiturgyToSupabase, cloudConfirmedDates, CLOUD_WRITE_SKIP, saveSharedDoc, takeInSharedDoc, fetchAllSharedDataFromSupabase, isActivelyEditingField, noteFieldTouched, loadSharedCloudBase, retryPendingSharedDocs, pushBackupSharedData, SHARED_DOCS }', ctx);
 const T = ctx.__t;
 
 let passed = 0, failed = 0;
@@ -325,10 +325,10 @@ function columns(){
     const q = { f: [], op: 'select' };
     const run = async () => {
       await tick(); const rows = db[table]; const keyCol = table === 'liturgies' ? 'service_date' : 'key';
-      const key = (q.f.find(x => x[0] === keyCol) || [])[2];
+      const key = (q.f.find(x => x[0] === keyCol && x[1] === "eq") || [])[2]; const inKeys = (q.f.find(x => x[0] === keyCol && x[1] === "in") || [])[2];
       if(q.op === 'select'){
         if(failRead) return { data: null, error: { message: 'read failed' } };
-        if(key === undefined) return { data: Object.entries(rows).map(([k, r]) => ({ key: k, data: clone(r.data) })), error: null };
+        if(key === undefined) return { data: Object.entries(rows).filter(([k]) => !inKeys || inKeys.includes(k)).map(([k, r]) => ({ key: k, data: clone(r.data) })), error: null };
         const r = rows[key]; const out = r ? { data: clone(r.data), updated_at: r.updated_at } : null;
         if(hook) await hook(key);
         return { data: out, error: null };
@@ -338,7 +338,7 @@ function columns(){
       if(!r || (ts && Date.parse(ts[2]) !== Date.parse(r.updated_at))) return { data: [], error: null };
       r.data = q.v.data; r.updated_at = new Date(clock++).toISOString(); return { data: [{}], error: null };
     };
-    const b = { select(){ return b; }, eq(c, v){ q.f.push([c, 'eq', v]); return b; }, is(c, v){ q.f.push([c, 'is', v]); return b; },
+    const b = { select(){ return b; }, eq(c, v){ q.f.push([c, 'eq', v]); return b; }, is(c, v){ q.f.push([c, 'is', v]); return b; }, in(c, v){ q.f.push([c, 'in', v]); return b; },
       update(v){ q.op = 'update'; q.v = v; return b; }, insert(v){ q.op = 'insert'; q.v = v; return run(); }, maybeSingle(){ return run(); }, then(a, c){ return run().then(a, c); } };
     return b;
   }};
@@ -481,6 +481,22 @@ function columns(){
   ctx.localStorage = fullStorage; ctx.ministerRoster = ['Clint'];
   await T.saveSharedDoc('ministerRoster');
   check('storage full: an outdated baseline is dropped, not kept', T.loadSharedCloudBase('ministerRoster') === null);
+
+  // ---- a field left focused doesn't hold off a teammate's changes ----
+  ctx.document.activeElement = { tagName: 'INPUT' };
+  T.noteFieldTouched();
+  check('focus: a field just touched counts as being edited', T.isActivelyEditingField() === true);
+  vm.runInContext('lastFieldTouchAt = Date.now() - 20000', ctx);
+  check('focus: a focused field left alone for 20s no longer holds off updates', T.isActivelyEditingField() === false);
+  ctx.document.activeElement = { tagName: 'DIV', isContentEditable: false };
+  T.noteFieldTouched();
+  check('focus: a non-field never counts', T.isActivelyEditingField() === false);
+  ctx.document.activeElement = null;
+
+  // ---- fetching only some shared rows (the open Planner) ----
+  ctx.localStorage = makeStorage();
+  const some = await T.fetchAllSharedDataFromSupabase(['schedule', 'scheduleColumnsConfig']);
+  check('partial fetch: only the asked-for rows come back', Object.keys(some).sort().join() === 'schedule,scheduleColumnsConfig', Object.keys(some));
 
   // ---- optional replay of a real service ----
   if(process.env.LF_REPLAY_FILE){
