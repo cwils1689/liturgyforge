@@ -543,6 +543,11 @@ function markServiceSent(dateStr){
   delete all[dateStr];
   storeUnsentServices(all);
 }
+// The cloud copy this browser's unsent edits for that date were made on.
+function unsentServiceBase(dateStr){
+  const entry = loadUnsentServices()[dateStr];
+  return entry && currentUser && entry.userId === currentUser.id && entry.base ? entry.base : null;
+}
 // The service to open: the cloud copy with this browser's unsent edits
 // replayed on top, or null when there's nothing to bring back.
 function recoverUnsentService(dateStr, cloud){

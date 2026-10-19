@@ -5,7 +5,7 @@ Last number for fixes, middle number for new features.
 
 ## 1.0.3 — 2026-10-19
 
-- An edit that couldn't reach the cloud (a failed save, or the app closed first) is no longer lost. The next time that service is opened, the edit is put back on top of the cloud copy, keeping teammates' changes, and saved.
+- An edit that couldn't reach the cloud (a failed save, or the app closed first) is no longer lost. The next time that service is opened, the edit is put back on top of the cloud copy, keeping teammates' changes, and saved. This includes reopening the app while still offline.
 - Closing the app while signed in now warns if a change hasn't reached the cloud yet.
 - Signing out now removes the church's services, Planner, and lists from that browser, after sending any unsaved changes. It warns first if something couldn't be sent.
 - Restoring a backup now says if anything couldn't be saved, and its warning describes what a signed-in restore actually does. Only the parts a backup is made of are restored.

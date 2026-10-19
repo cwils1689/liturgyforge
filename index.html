@@ -6372,7 +6372,10 @@ async function onDateChange(){
       elements: m.elements.map(el => ({ ...migrateElement(el), id: newId() }))
     }));
     currentLoadedDate = dateStr;
-    if(cloudUnreachable) setLiturgyCloudBase(dateStr, snap);
+    // Offline: diff against the last cloud copy this browser knew, if edits
+    // made on it are still unsent — otherwise those edits would count as
+    // already in the cloud and never be sent.
+    if(cloudUnreachable) setLiturgyCloudBase(dateStr, unsentServiceBase(dateStr) || snap);
     document.getElementById('mainColorDot').innerHTML = scheduleColorDotHtml(dateStr);
     render();
     // Straight from the cloud — nothing to save back until it's edited.

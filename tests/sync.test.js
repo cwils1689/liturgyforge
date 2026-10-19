@@ -46,7 +46,7 @@ const ctx = {
 vm.createContext(ctx);
 vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'sync.js'), 'utf8'), ctx);
 // Top-level let/const in a script aren't properties of the context; expose what tests use.
-vm.runInContext('globalThis.__t = { syncDiff, syncApply, syncRebase, syncNormalizeService, syncSame, ensureElementUids, mergeAndWriteCloudRow, pushLiturgyToSupabase, cloudConfirmedDates, CLOUD_WRITE_SKIP, saveSharedDoc, takeInSharedDoc, fetchAllSharedDataFromSupabase, isActivelyEditingField, noteFieldTouched, markServiceUnsent, markServiceSent, recoverUnsentService, loadUnsentServices, loadSharedCloudBase, retryPendingSharedDocs, pushBackupSharedData, SHARED_DOCS }', ctx);
+vm.runInContext('globalThis.__t = { syncDiff, syncApply, syncRebase, syncNormalizeService, syncSame, ensureElementUids, mergeAndWriteCloudRow, pushLiturgyToSupabase, cloudConfirmedDates, CLOUD_WRITE_SKIP, saveSharedDoc, takeInSharedDoc, fetchAllSharedDataFromSupabase, isActivelyEditingField, noteFieldTouched, markServiceUnsent, markServiceSent, recoverUnsentService, loadUnsentServices, unsentServiceBase, loadSharedCloudBase, retryPendingSharedDocs, pushBackupSharedData, SHARED_DOCS }', ctx);
 const T = ctx.__t;
 
 let passed = 0, failed = 0;
@@ -518,6 +518,14 @@ function columns(){
     T.markServiceUnsent(D2, base);
     const sameField = clone(base); find(sameField, 'Prayer of Confession').content = 'B newer';
     check('recovery: same field, this browser\x27s edit is replayed', find(T.recoverUnsentService(D2, sameField), 'Prayer of Confession').content === 'A offline edit');
+
+    // Reopened offline: the baseline is the cloud copy the unsent edits were
+    // made on, not this browser's copy (which would hide them).
+    T.markServiceUnsent(D2, base);
+    check('recovery: offline reopen diffs against the old cloud copy', T.syncSame(T.unsentServiceBase(D2), base));
+    ctx.currentUser = { id: 'u2', email: 'b@example.test' };
+    check("recovery: another account's baseline isn't used", T.unsentServiceBase(D2) === null);
+    ctx.currentUser = { id: 'u1', email: 'a@example.test' };
 
     // Nothing actually unsent: the cloud copy opens as is and the mark goes.
     ctx.localStorage.setItem('liturgyArchive', JSON.stringify({ [D2]: base }));
