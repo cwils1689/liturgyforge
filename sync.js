@@ -515,6 +515,58 @@ async function handleLiturgyDeletedElsewhere(dateStr){
   }
   refreshServicesPanelIfOpen();
 }
+/* ---------------------------------------------------------------------
+   Unsent services: edits saved in this browser that haven't reached the
+   cloud yet (the save failed, or the app closed first). Each is kept with
+   the cloud copy those edits were made on, so opening the service later
+   replays them onto the current cloud copy instead of the cloud copy
+   replacing them.
+--------------------------------------------------------------------- */
+function loadUnsentServices(){
+  try{
+    const all = JSON.parse(localStorage.getItem('unsentServices') || '{}');
+    return all && typeof all === 'object' ? all : {};
+  }catch(e){ return {}; }
+}
+function storeUnsentServices(all){
+  try{ localStorage.setItem('unsentServices', JSON.stringify(all)); }catch(e){}
+}
+function markServiceUnsent(dateStr, base){
+  if(!currentUser || !dateStr) return;
+  const all = loadUnsentServices();
+  all[dateStr] = { userId: currentUser.id, base: base || null };
+  storeUnsentServices(all);
+}
+function markServiceSent(dateStr){
+  const all = loadUnsentServices();
+  if(!(dateStr in all)) return;
+  delete all[dateStr];
+  storeUnsentServices(all);
+}
+// The service to open: the cloud copy with this browser's unsent edits
+// replayed on top, or null when there's nothing to bring back.
+function recoverUnsentService(dateStr, cloud){
+  const entry = loadUnsentServices()[dateStr];
+  if(!entry) return null;
+  const local = loadLiturgyArchive()[dateStr];
+  if(!currentUser || entry.userId !== currentUser.id || !local || !local.movements || !cloud || !cloud.movements){
+    markServiceSent(dateStr);
+    return null;
+  }
+  const pick = s => ({ churchTitle: s.churchTitle, serviceTitle: s.serviceTitle, movements: s.movements });
+  const cloudSide = syncNormalizeService(pick(cloud));
+  const localSide = syncNormalizeService(pick(local));
+  // Without a baseline (e.g. a service started offline), whole copies are
+  // merged with this browser's winning a conflict, as a save would.
+  const merged = entry.base
+    ? syncRebase(cloudSide, localSide, syncNormalizeService(pick(entry.base)))
+    : mergeFavoringContent(cloudSide, localSide);
+  if(syncSame(merged, cloudSide)){
+    markServiceSent(dateStr);
+    return null;
+  }
+  return { ...cloud, ...merged };
+}
 // Returns null when the cloud has no service for that date, and undefined
 // when the cloud couldn't be reached (offline, error) — onDateChange treats
 // those differently.
@@ -676,16 +728,21 @@ function performAutosave(){
     const archive = loadLiturgyArchive();
     archive[dateStr] = snapshot;
     localStorage.setItem('liturgyArchive', JSON.stringify(archive));
-  }catch(e){}
-  lastSavedSnapshotJSON = currentJSON;
+    noteLocalSave(true);
+    // Only counts as saved once it's actually stored, so leaving still warns.
+    lastSavedSnapshotJSON = currentJSON;
+  }catch(e){ noteLocalSave(false); }
   if(!currentUser) return;
   // One save at a time, so each starts from the base the previous one's
   // reconcile left behind.
   liturgyPushQueuedJSON = currentJSON;
+  markServiceUnsent(dateStr, liturgyCloudBase[dateStr]);
   liturgyPushChain = liturgyPushChain.then(async () => {
     try{
       const baseBeforePush = liturgyCloudBase[dateStr];
       const pushedMerged = await pushLiturgyToSupabase(dateStr, snapshot, baseBeforePush, { live: true });
+      // Newer edits queued behind this save keep the service marked.
+      if(pushedMerged && liturgyPushQueuedJSON === currentJSON) markServiceSent(dateStr);
       if(!pushedMerged || currentLoadedDate !== dateStr) return;
       lastPushedSnapshotJSON = currentJSON;
       reconcileLiturgyFromCloud(dateStr, pushedMerged, baseBeforePush, lastWrittenCloudUpdatedAt[dateStr]);

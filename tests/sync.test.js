@@ -34,6 +34,8 @@ const ctx = {
   sbClient: null,
   cloudSyncFailing: false,
   updateOfflineBanner: noop,
+  noteLocalSave: noop,
+  loadLiturgyArchive: () => JSON.parse(ctx.localStorage.getItem('liturgyArchive') || '{}'),
   customConfirm: async () => true,
   computeAssignedMinisters: movements => {
     const names = new Set();
@@ -44,7 +46,7 @@ const ctx = {
 vm.createContext(ctx);
 vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'sync.js'), 'utf8'), ctx);
 // Top-level let/const in a script aren't properties of the context; expose what tests use.
-vm.runInContext('globalThis.__t = { syncDiff, syncApply, syncRebase, syncNormalizeService, syncSame, ensureElementUids, mergeAndWriteCloudRow, pushLiturgyToSupabase, cloudConfirmedDates, CLOUD_WRITE_SKIP, saveSharedDoc, takeInSharedDoc, fetchAllSharedDataFromSupabase, isActivelyEditingField, noteFieldTouched, loadSharedCloudBase, retryPendingSharedDocs, pushBackupSharedData, SHARED_DOCS }', ctx);
+vm.runInContext('globalThis.__t = { syncDiff, syncApply, syncRebase, syncNormalizeService, syncSame, ensureElementUids, mergeAndWriteCloudRow, pushLiturgyToSupabase, cloudConfirmedDates, CLOUD_WRITE_SKIP, saveSharedDoc, takeInSharedDoc, fetchAllSharedDataFromSupabase, isActivelyEditingField, noteFieldTouched, markServiceUnsent, markServiceSent, recoverUnsentService, loadUnsentServices, loadSharedCloudBase, retryPendingSharedDocs, pushBackupSharedData, SHARED_DOCS }', ctx);
 const T = ctx.__t;
 
 let passed = 0, failed = 0;
@@ -492,6 +494,49 @@ function columns(){
   T.noteFieldTouched();
   check('focus: a non-field never counts', T.isActivelyEditingField() === false);
   ctx.document.activeElement = null;
+
+  // ---- an edit that never reached the cloud comes back on reopen ----
+  {
+    ctx.localStorage = makeStorage(); ctx.currentUser = { id: 'u1', email: 'a@example.test' };
+    const D2 = '2026-11-01';
+    const base = service();
+    // A edits the confession and saves locally, but the cloud save fails.
+    const A = clone(base); find(A, 'Prayer of Confession').content = 'A offline edit';
+    ctx.localStorage.setItem('liturgyArchive', JSON.stringify({ [D2]: A }));
+    T.markServiceUnsent(D2, base);
+    // Meanwhile B changes the exhortation and the hymn in the cloud.
+    const cloud = clone(base); find(cloud, 'Exhortation').content = 'B edit'; find(cloud, 'Hymn').hymnNumber = '200';
+    const back = T.recoverUnsentService(D2, cloud);
+    check('recovery: the unsent edit comes back', back && find(back, 'Prayer of Confession').content === 'A offline edit', back && find(back, 'Prayer of Confession'));
+    check("recovery: the teammate's edits are kept", back && find(back, 'Exhortation').content === 'B edit' && find(back, 'Hymn').hymnNumber === '200');
+    check('recovery: still marked until the save lands', !!T.loadUnsentServices()[D2]);
+    T.markServiceSent(D2);
+    check('recovery: a landed save clears the mark', !T.loadUnsentServices()[D2]);
+
+    // Same field on both sides: the unsent edit was made first, so the
+    // recovered copy carries it, the same as a late save would.
+    T.markServiceUnsent(D2, base);
+    const sameField = clone(base); find(sameField, 'Prayer of Confession').content = 'B newer';
+    check('recovery: same field, this browser\x27s edit is replayed', find(T.recoverUnsentService(D2, sameField), 'Prayer of Confession').content === 'A offline edit');
+
+    // Nothing actually unsent: the cloud copy opens as is and the mark goes.
+    ctx.localStorage.setItem('liturgyArchive', JSON.stringify({ [D2]: base }));
+    T.markServiceUnsent(D2, base);
+    check('recovery: nothing to bring back', T.recoverUnsentService(D2, cloud) === null && !T.loadUnsentServices()[D2]);
+
+    // A mark left by another account is dropped, not applied.
+    ctx.localStorage.setItem('liturgyArchive', JSON.stringify({ [D2]: A }));
+    T.markServiceUnsent(D2, base);
+    ctx.currentUser = { id: 'u2', email: 'b@example.test' };
+    check("recovery: another account's unsent edit isn't applied", T.recoverUnsentService(D2, cloud) === null && !T.loadUnsentServices()[D2]);
+    ctx.currentUser = { id: 'u1', email: 'a@example.test' };
+
+    // A service started offline (no cloud copy to diff against): whole copies
+    // merged, this browser's content winning, as a save without a baseline does.
+    T.markServiceUnsent(D2, undefined);
+    const noBase = T.recoverUnsentService(D2, cloud);
+    check('recovery: without a baseline the unsent edit still comes back', noBase && find(noBase, 'Prayer of Confession').content === 'A offline edit');
+  }
 
   // ---- fetching only some shared rows (the open Planner) ----
   ctx.localStorage = makeStorage();

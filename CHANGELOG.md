@@ -3,6 +3,18 @@
 Versions stay below 1.0.0 until the new sync design rolls out; that release will be 1.0.0.
 Last number for fixes, middle number for new features.
 
+## 1.0.3 — 2026-10-19
+
+- An edit that couldn't reach the cloud (a failed save, or the app closed first) is no longer lost. The next time that service is opened, the edit is put back on top of the cloud copy, keeping teammates' changes, and saved.
+- Closing the app while signed in now warns if a change hasn't reached the cloud yet.
+- Signing out now removes the church's services, Planner, and lists from that browser, after sending any unsaved changes. It warns first if something couldn't be sent.
+- Restoring a backup now says if anything couldn't be saved, and its warning describes what a signed-in restore actually does. Only the parts a backup is made of are restored.
+- If this browser runs out of storage space, a notice now says so, with a button to save the open service to a file.
+- The Planner, services list, and file names use your own date, not the UTC date. On Sunday evenings the Planner no longer treats that day as past.
+- Movement names, sermon series, ministers, and template names with unusual characters (quotes, backslashes, markup) now display and work correctly. Pasted or imported text is cleaned more safely.
+- The app's outside libraries are now fixed to tested versions and checked before they run.
+- Removed an unused file of Pillar's past Planner data that listed members' names.
+
 ## 1.0.2 — 2026-10-19
 
 - Switching to the Trinity Hymnal in the hymnal panel now shows its lyrics. Before, they appeared only after closing and reopening the panel.
