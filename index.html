@@ -9177,29 +9177,34 @@ function loadSchedule(){
   // once per browser — same one-time-seed pattern as seedPillarTemplateOnce.
   if(!hasSavedData){
     const sampleDateStr = localDateISO(sundayOnOrAfter(addDays(new Date(), 1)));
-    data = { [sampleDateStr]: {
-      scripture: 'Psalm 100:1-5',
-      collect: 'Almighty God, unto whom all hearts are open, all desires known, and from whom no secrets are hid: cleanse the thoughts of our hearts, that we may perfectly love you and worthily magnify your holy name.',
-      hymn1: 'Come, Thou Almighty King',
-      prayerVerse: 'Psalm 51:1-4',
-      assuranceVerse: 'Romans 8:1',
-      hymn2: 'Rock of Ages, Cleft for Me',
-      opening: 'Praise for God\u2019s faithfulness',
-      thanksgiving: 'Thanksgiving for the church family',
-      petitions: 'Prayer for the sick and for missionaries',
-      hymn3: 'Be Thou My Vision',
-      sermonSeries: 'Sample Series',
-      sermonText: 'John 3:16-21',
-      preacher: 'Pastor Name',
-      hymn4: 'All Creatures of Our God and King',
-      offering: 'General fund',
-      hymn5: 'How Firm a Foundation',
-      benediction: 'Numbers 6:24-26',
-      notes: 'Sample entry — edit or delete it once you\u2019ve planned your first real service.'
-    } };
+    data = { [sampleDateStr]: { ...SAMPLE_SCHEDULE_ROW } };
   }
   return data;
 }
+// The sample row seeded above. When a browser first syncs with an account
+// (after sign-in, or after signing out cleared it), an untouched sample is
+// dropped before merging so it can't fill in or overwrite the real row for
+// that date (see withoutUntouchedSampleRow in sync.js).
+const SAMPLE_SCHEDULE_ROW = {
+  scripture: 'Psalm 100:1-5',
+  collect: 'Almighty God, unto whom all hearts are open, all desires known, and from whom no secrets are hid: cleanse the thoughts of our hearts, that we may perfectly love you and worthily magnify your holy name.',
+  hymn1: 'Come, Thou Almighty King',
+  prayerVerse: 'Psalm 51:1-4',
+  assuranceVerse: 'Romans 8:1',
+  hymn2: 'Rock of Ages, Cleft for Me',
+  opening: 'Praise for God\u2019s faithfulness',
+  thanksgiving: 'Thanksgiving for the church family',
+  petitions: 'Prayer for the sick and for missionaries',
+  hymn3: 'Be Thou My Vision',
+  sermonSeries: 'Sample Series',
+  sermonText: 'John 3:16-21',
+  preacher: 'Pastor Name',
+  hymn4: 'All Creatures of Our God and King',
+  offering: 'General fund',
+  hymn5: 'How Firm a Foundation',
+  benediction: 'Numbers 6:24-26',
+  notes: 'Sample entry — edit or delete it once you\u2019ve planned your first real service.'
+};
 function saveSchedule(){
   SHARED_DOCS.schedule.set(scheduleData);
   saveSharedDoc('schedule');
@@ -10146,7 +10151,7 @@ function snoozeBackupNudge(){
    a reload once a newer version is out. Bump APP_VERSION and
    version.json together on every release (see CHANGELOG.md).
 --------------------------------------------------------------------- */
-const APP_VERSION = '1.0.3';
+const APP_VERSION = '1.0.4';
 document.getElementById('appVersion').textContent = 'v' + APP_VERSION;
 function customAlert(message){
   const cancel = document.getElementById('modalCancel');

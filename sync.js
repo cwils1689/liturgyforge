@@ -894,8 +894,9 @@ const SHARED_DOCS = {
       scheduleData = v;
       try{ localStorage.setItem('liturgySchedule', JSON.stringify(v)); }catch(e){}
     },
-    mergeWithoutBase: mergeScheduleWithoutBase,
-    takeInWithoutBase: mergeScheduleWithoutBase,
+    // An untouched sample row is never merged into a church's Planner.
+    mergeWithoutBase: (cloud, local) => mergeScheduleWithoutBase(cloud, withoutUntouchedSampleRow(local)),
+    takeInWithoutBase: (cloud, local) => mergeScheduleWithoutBase(cloud, withoutUntouchedSampleRow(local)),
   },
   // Planner columns, identified by key: adding, removing, renaming and
   // reordering columns are each a change.
@@ -960,6 +961,13 @@ function mergeScheduleWithoutBase(cloud, local){
   const merged = {};
   new Set([...Object.keys(cloud), ...Object.keys(local)]).forEach(d => { merged[d] = mergeFavoringContent(cloud[d], local[d]); });
   return merged;
+}
+// A browser's Planner minus the sample row it seeds when it has none of its
+// own (SAMPLE_SCHEDULE_ROW, in index.html), unless someone has edited it.
+function withoutUntouchedSampleRow(schedule){
+  const out = { ...(schedule || {}) };
+  Object.keys(out).forEach(d => { if(syncSame(out[d], SAMPLE_SCHEDULE_ROW)) delete out[d]; });
+  return out;
 }
 function loadSharedCloudBase(key){
   if(!currentUser) return null;

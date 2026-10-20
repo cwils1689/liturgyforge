@@ -3,6 +3,10 @@
 Versions stay below 1.0.0 until the new sync design rolls out; that release will be 1.0.0.
 Last number for fixes, middle number for new features.
 
+## 1.0.4 — 2026-10-20
+
+- Signing in on a browser with no Planner of its own (a new browser, or one that was signed out) no longer lets the sample Planner row replace or fill in the church's real row for that Sunday. The sample is set aside unless someone has edited it.
+
 ## 1.0.3 — 2026-10-19
 
 - An edit that couldn't reach the cloud (a failed save, or the app closed first) is no longer lost. The next time that service is opened, the edit is put back on top of the cloud copy, keeping teammates' changes, and saved. This includes reopening the app while still offline.

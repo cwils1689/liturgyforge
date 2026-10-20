@@ -21,6 +21,7 @@ const ctx = {
   scheduleData: {},
   scheduleColumns: [],
   scheduleColumnsHasLocalSave: true,
+  SAMPLE_SCHEDULE_ROW: { scripture: 'Psalm 100:1-5', hymn1: 'Come, Thou Almighty King', preacher: 'Pastor Name', notes: 'Sample entry' },
   ministerRoster: [],
   ministerColors: {},
   ministerEmails: {},
@@ -411,6 +412,20 @@ function columns(){
   ctx.currentUser = { id: 'u2', email: 'b@example.test' };
   check("planner: another account doesn't use this baseline", T.loadSharedCloudBase('schedule') === null);
   ctx.currentUser = { id: 'u1', email: 'a@example.test' };
+
+  // A browser with no Planner of its own (new, or signed out) shows a sample
+  // row; signing in mustn't let it fill in or overwrite the church's row.
+  const realRow = clone(db.shared_data.schedule.data['2026-10-18']);
+  devices.C = { ls: makeStorage(), data: { '2026-10-18': clone(ctx.SAMPLE_SCHEDULE_ROW) } };
+  await pullOn('C');
+  check('sample row: taking in the cloud drops it', T.syncSame(ctx.scheduleData['2026-10-18'], realRow), ctx.scheduleData['2026-10-18']);
+  devices.D = { ls: makeStorage(), data: { '2026-10-18': clone(ctx.SAMPLE_SCHEDULE_ROW) } };
+  as('D'); await T.saveSharedDoc('schedule');
+  check('sample row: a first save drops it', T.syncSame(db.shared_data.schedule.data['2026-10-18'], realRow), db.shared_data.schedule.data['2026-10-18']);
+  devices.E = { ls: makeStorage(), data: { '2026-12-06': { ...clone(ctx.SAMPLE_SCHEDULE_ROW), preacher: 'Edited' } } };
+  await pullOn('E');
+  check('sample row: kept once someone has edited it', ctx.scheduleData['2026-12-06'] && ctx.scheduleData['2026-12-06'].preacher === 'Edited');
+  as('B');
 
   failRead = true; console.error = noop;
   ctx.scheduleData['2026-11-01'].hymn1 = 'while offline';
