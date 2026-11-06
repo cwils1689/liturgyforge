@@ -47,7 +47,6 @@
     color:var(--ink);
     font-family:'Inter',sans-serif;
     -webkit-font-smoothing:antialiased;
-    transition:padding-right .22s ease, padding-left .22s ease;
   }
   body.hymnal-open{ padding-right:360px; }
   body.services-open{ padding-left:300px; }
@@ -6382,6 +6381,7 @@ async function onDateChange(){
     if(snapFromCloud) lastPushedSnapshotJSON = buildCurrentSnapshotJSON();
     refreshServicesPanelIfOpen();
     updateCurrentDateDisplay();
+    applyPlannerToOpenedService(dateStr);
     return;
   }
 
@@ -6611,6 +6611,19 @@ function updateCurrentDateDisplay(){
   const btn = document.getElementById('currentDateDisplay');
   if(!btn) return;
   btn.textContent = dateStr ? '📃 ' + formatServiceDateLabel(dateStr) : '📃 Select a Service';
+}
+// A saved service takes in its Planner row when opened, so Planner edits
+// made while another date was open (here or by a teammate) show up. Any
+// change it makes is sent by the next autosave.
+async function applyPlannerToOpenedService(dateStr){
+  if(currentUser){
+    const cloud = await fetchAllSharedDataFromSupabase(['schedule']);
+    takeInSharedDoc('schedule', cloud.schedule);
+  }
+  if(currentLoadedDate !== dateStr || !scheduleData[dateStr]) return;
+  const before = buildCurrentSnapshotJSON();
+  applyScheduleForDate(dateStr);
+  if(buildCurrentSnapshotJSON() !== before) render();
 }
 function resyncCurrentDate(){
   if(!confirm('Refresh RCL, BCP, and Schedule data for this date? This will overwrite those specific fields — including any hand-edits you\'ve made to them — but leaves the rest of the liturgy untouched.')) return;
@@ -6895,7 +6908,6 @@ async function fetchEsvForReading(id, key){
   const text = await fetchBiblePassage(r.reference);
   if(text){
     r.content = text;
-    if(el.readings) el.includeText = true;
     render();
   }
 }
@@ -6929,7 +6941,6 @@ async function autoFetchEsvForReading(id, key, force){
   const text = await fetchBiblePassage(r.reference, true);
   if(text){
     r.content = text;
-    if(el.readings) el.includeText = true;
     render();
   }
 }
@@ -8332,7 +8343,27 @@ function syncHymnalSearchFromField(value){
 function updatePanelLayout(){
   const hymnalOpen = document.getElementById('hymnalPanel').classList.contains('open');
   document.getElementById('scheduleOverlay').classList.toggle('make-room', hymnalOpen);
-  document.body.classList.toggle('hymnal-open', hymnalOpen);
+  keepLiturgyPlace(() => document.body.classList.toggle('hymnal-open', hymnalOpen));
+}
+// Opening or closing a side panel pads the page to make room, which can
+// rewrap the liturgy and push your place off screen; browsers don't correct
+// for a padding change. This keeps the box being typed in (or whatever is a
+// card a third of the way down the screen) in the same spot. The padding has no
+// transition, so the new layout can be measured right away.
+function keepLiturgyPlace(change){
+  const app = document.querySelector('.app');
+  let anchor = document.activeElement;
+  const onScreen = el => { const r = el.getBoundingClientRect(); return r.bottom > 0 && r.top < window.innerHeight; };
+  if(!app || !anchor || !app.contains(anchor) || !onScreen(anchor)){
+    const r = app && app.getBoundingClientRect();
+    const hit = r && document.elementsFromPoint(r.left + r.width / 2, window.innerHeight / 3).find(el => el !== app && app.contains(el));
+    anchor = hit ? (hit.closest('.element-card, .movement-head') || hit) : null;
+  }
+  const startTop = anchor && anchor.getBoundingClientRect().top;
+  change();
+  if(!anchor) return;
+  const drift = anchor.getBoundingClientRect().top - startTop;
+  if(drift) window.scrollBy({ top: drift, behavior: 'instant' });
 }
 let hymnLyrics = null;
 let hymnLyricsLoading = false;
@@ -9460,7 +9491,7 @@ function onScheduleColResizeEnd(){
 --------------------------------------------------------------------- */
 function updateLeftPanelBodyClass(){
   const anyOpen = document.getElementById('servicesPanel').classList.contains('open');
-  document.body.classList.toggle('services-open', anyOpen);
+  keepLiturgyPlace(() => document.body.classList.toggle('services-open', anyOpen));
 }
 function closeServicesPanel(){
   document.getElementById('servicesPanel').classList.remove('open');
@@ -9633,14 +9664,10 @@ function updateScheduleField(dateKey, field, value){
   scheduleData[dateKey][field] = value;
   saveSchedule();
 
-  const pastoralPrayerFields = { opening:'opening', thanksgiving:'thanksgiving', petitions:'petitions' };
-  if(pastoralPrayerFields[field] && dateKey === document.getElementById('serviceDate')?.value){
-    const pp = findByScheduleKey('pastoralPrayer');
-    const section = pp && pp.sections && pp.sections.find(s => s.key === pastoralPrayerFields[field]);
-    if(section){
-      section.reference = value;
-      render();
-    }
+  // The open service's date: carry the cell into the Builder right away.
+  if(dateKey === document.getElementById('serviceDate')?.value){
+    applyScheduleForDate(dateKey, field);
+    render();
   }
 }
 function updateScheduleDate(oldKey, newKey){
@@ -9888,9 +9915,11 @@ function parseHymnString(str){
   if(m) return { num:m[1], title:m[2] };
   return { num:'', title:str.trim() };
 }
-async function applyScheduleForDate(dateStr){
-  const entry = scheduleData[dateStr];
-  if(!entry) return;
+// onlyKey: apply just that one Planner column (a single cell edit).
+async function applyScheduleForDate(dateStr, onlyKey){
+  const row = scheduleData[dateStr];
+  if(!row) return;
+  const entry = onlyKey ? { [onlyKey]: row[onlyKey] } : row;
 
   // Content is never blanked here up front — a schedule-driven reference
   // change queues a *forced* refetch below, but the old text stays in place
@@ -10151,7 +10180,7 @@ function snoozeBackupNudge(){
    a reload once a newer version is out. Bump APP_VERSION and
    version.json together on every release (see CHANGELOG.md).
 --------------------------------------------------------------------- */
-const APP_VERSION = '1.0.4';
+const APP_VERSION = '1.0.5';
 document.getElementById('appVersion').textContent = 'v' + APP_VERSION;
 function customAlert(message){
   const cancel = document.getElementById('modalCancel');

@@ -3,6 +3,13 @@
 Versions stay below 1.0.0 until the new sync design rolls out; that release will be 1.0.0.
 Last number for fixes, middle number for new features.
 
+## 1.0.5 — 2026-11-06
+
+- Opening or closing the hymnal or the Services panel no longer scrolls the liturgy away from where you were working. The box you're typing in, or the part of the service on screen, stays in the same spot.
+- Opening a saved service now brings in that date's Planner row, so Planner changes made while another date was open (here or by a teammate) show up.
+- Editing a Planner cell for the open service now fills in the linked part of the liturgy right away, for every column, not just the pastoral prayer ones.
+- Fetching a Bible passage no longer turns on "include text" by itself.
+
 ## 1.0.4 — 2026-10-20
 
 - Signing in on a browser with no Planner of its own (a new browser, or one that was signed out) no longer lets the sample Planner row replace or fill in the church's real row for that Sunday. The sample is set aside unless someone has edited it.
