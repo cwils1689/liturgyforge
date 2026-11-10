@@ -741,22 +741,11 @@
     cursor:pointer; font-size:13px; padding:2px 4px;
   }
   .service-item-delete:hover{ color:#8a3a3a; }
-  .service-item-history{
-    flex-shrink:0; border:none; background:transparent; color:var(--ink-faint);
-    cursor:pointer; font-size:13px; padding:2px 4px;
-  }
-  .service-item-history:hover{ color:var(--ink); }
-  .service-versions{ margin:-2px 0 8px; border:1px solid var(--border); border-radius:6px; background:var(--bg); }
   .service-item-view{
     flex-shrink:0; border:none; background:transparent; color:var(--ink-faint);
     cursor:pointer; font-size:13px; padding:2px 4px;
   }
   .service-item-view:hover{ color:var(--ink); }
-  .service-version{ padding:6px 10px; font-size:11.5px; color:var(--ink); cursor:pointer; border-bottom:1px solid var(--border); }
-  .service-version:last-child{ border-bottom:none; }
-  .service-version:hover{ background:#fff8e8; }
-  .service-version-summary{ color:var(--ink-faint); margin-left:6px; }
-  .service-versions-note{ padding:6px 10px; font-size:11px; color:var(--ink-faint); }
 
   .hymnal-panel{
     position:fixed; top:0; right:0; height:100vh; width:360px; max-width:90vw;
@@ -1380,6 +1369,8 @@
     padding:2px 10px 6px;
   }
   .export-menu-divider{ height:1px; background:var(--border); margin:4px 2px; }
+  .versions-menu-list{ max-height:50vh; overflow-y:auto; }
+  .versions-menu-summary{ color:var(--ink-faint); font-size:11.5px; }
   .resource-menu-row{ justify-content:space-between; padding-right:6px; }
   .resource-menu-row a{ flex:1; color:var(--ink); text-decoration:none; overflow:hidden; text-overflow:ellipsis; }
   .resource-menu-row a:hover{ text-decoration:underline; }
@@ -1943,7 +1934,7 @@
   </footer>
 </div>
 
-<script src="sync.js?v=1.1.1"></script>
+<script src="sync.js?v=1.1.2"></script>
 <script>
 const ICONS = {
   welcome: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="3" width="12" height="18" rx="1"/><circle cx="13.5" cy="12" r="1"/><path d="M17 3v18"/></svg>',
@@ -7846,9 +7837,18 @@ function openExportMenu(triggerEl){
     <div class="export-menu-row" onclick="closeExportMenu(); saveToFile();">💾 Save Liturgy File</div>
     <div class="export-menu-row" onclick="closeExportMenu(); window.print();">🖨 Print / Save as PDF</div>
     <div class="export-menu-row" onclick="closeExportMenu(); exportLiturgyDocx();">📝 Export to Word (.docx)</div>
+    ${currentUser && currentLoadedDate ? '<div class="export-menu-row" onclick="showServiceVersionsMenu()">🕘 Earlier Versions</div>' : ''}
   `;
   pop._trigger = triggerEl;
   pop.style.display = 'block';
+  positionExportMenu();
+  setTimeout(() => document.addEventListener('mousedown', exportMenuOutsideClick), 0);
+}
+// Also re-run when the menu's contents change size (the Earlier Versions list).
+function positionExportMenu(){
+  const pop = document.getElementById('exportMenuPopover');
+  const triggerEl = pop._trigger;
+  if(!triggerEl) return;
   const rect = triggerEl.getBoundingClientRect();
   const popRect = pop.getBoundingClientRect();
   let left = rect.left;
@@ -7857,7 +7857,6 @@ function openExportMenu(triggerEl){
   if(top + popRect.height > window.innerHeight - 8) top = rect.top - popRect.height - 4;
   pop.style.left = Math.max(8, left) + 'px';
   pop.style.top = Math.max(8, top) + 'px';
-  setTimeout(() => document.addEventListener('mousedown', exportMenuOutsideClick), 0);
 }
 function closeExportMenu(){
   const pop = document.getElementById('exportMenuPopover');
@@ -9683,44 +9682,41 @@ function renderServicesListFromData(archive){
         ${title ? `<div class="service-item-title">${escapeHTML(title)}</div>` : ''}
       </div>
       ${splitViewAvailable() && !isActive ? `<button class="service-item-view" onclick="event.stopPropagation(); openComparePanel('${d}')" title="View beside the open service">👁</button>` : ''}
-      ${currentUser ? `<button class="service-item-history" onclick="event.stopPropagation(); toggleServiceVersions('${d}')" title="Earlier versions">🕘</button>` : ''}
       <button class="service-item-delete" onclick="event.stopPropagation(); deleteServiceFromPanel('${d}')" title="Delete this service">✕</button>
-    </div>${currentUser && serviceVersions && serviceVersions.date === d ? serviceVersionsHtml() : ''}`;
+    </div>`;
   }).join('');
 }
-/* Earlier versions of a service, from liturgy_history (a Supabase
-   trigger copies the old version there before each change). */
-let serviceVersions = null; // { date, rows } for the one open list; rows null while loading
-async function toggleServiceVersions(dateStr){
-  if(serviceVersions && serviceVersions.date === dateStr){ serviceVersions = null; renderServicesList(); return; }
+/* Earlier versions of the open service, from liturgy_history (a Supabase
+   trigger copies the old version there before each change). Shown in
+   the Import/Export menu. */
+let serviceVersions = null; // { date, rows } for the list last shown
+async function showServiceVersionsMenu(){
+  const dateStr = currentLoadedDate;
+  const pop = document.getElementById('exportMenuPopover');
+  if(!dateStr || !currentUser) return;
   serviceVersions = { date: dateStr, rows: null };
-  renderServicesList();
-  let rows = [];
+  pop.innerHTML = '<div class="templates-menu-hint">Loading…</div>';
+  positionExportMenu();
+  let html;
   try{
     const { data, error } = await sbClient.from('liturgy_history').select('id, data, archived_at')
       .eq('service_date', dateStr).order('archived_at', { ascending: false }).limit(30);
     if(error) throw error;
-    rows = (data || []).filter(r => r.data && Array.isArray(r.data.movements));
+    const rows = (data || []).filter(r => r.data && Array.isArray(r.data.movements));
+    serviceVersions.rows = rows;
+    html = rows.length ? rows.map(r => {
+      const els = r.data.movements.flatMap(m => m.elements || []);
+      const withText = els.filter(el => typeof el.content === 'string' && !isBlankContent(el.content)).length;
+      return `<div class="export-menu-row" onclick="closeExportMenu(); restoreServiceVersion(${Number(r.id)})">${escapeHTML(formatVersionTime(r.archived_at))}<span class="versions-menu-summary">${withText} of ${els.length} elements with text</span></div>`;
+    }).join('') : '<div class="templates-menu-hint">No earlier versions.</div>';
   }catch(e){
     console.error('Could not load earlier versions of this service.', e);
-    rows = 'error';
+    html = '<div class="templates-menu-hint">Couldn\'t load earlier versions.</div>';
   }
-  if(!serviceVersions || serviceVersions.date !== dateStr) return;
-  serviceVersions.rows = rows;
-  renderServicesList();
-}
-function serviceVersionsHtml(){
-  const rows = serviceVersions.rows;
-  let inner;
-  if(rows === null) inner = '<div class="service-versions-note">Loading…</div>';
-  else if(rows === 'error') inner = '<div class="service-versions-note">Couldn\'t load earlier versions.</div>';
-  else if(!rows.length) inner = '<div class="service-versions-note">No earlier versions.</div>';
-  else inner = rows.map(r => {
-    const els = r.data.movements.flatMap(m => m.elements || []);
-    const withText = els.filter(el => typeof el.content === 'string' && !isBlankContent(el.content)).length;
-    return `<div class="service-version" onclick="restoreServiceVersion(${Number(r.id)})">${escapeHTML(formatVersionTime(r.archived_at))}<span class="service-version-summary">${withText} of ${els.length} elements with text</span></div>`;
-  }).join('');
-  return `<div class="service-versions">${inner}</div>`;
+  // Closed, or a different service opened, while loading.
+  if(pop.style.display === 'none' || serviceVersions.date !== dateStr || currentLoadedDate !== dateStr) return;
+  pop.innerHTML = `<div class="versions-menu-list">${html}</div>`;
+  positionExportMenu();
 }
 function formatVersionTime(iso){
   return new Date(iso).toLocaleString(undefined, { weekday:'short', month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
@@ -9750,7 +9746,7 @@ async function restoreServiceVersion(historyId){
   }catch(e){}
   serviceVersions = null;
   if(wasOpen && !currentLoadedDate && document.getElementById('serviceDate').value === dateStr) await onDateChange();
-  renderServicesList();
+  refreshServicesPanelIfOpen();
 }
 async function deleteServiceFromPanel(dateStr){
   const label = formatServiceDateLabel(dateStr);
@@ -10600,7 +10596,7 @@ function snoozeBackupNudge(){
    and the ?v= on the sync.js script tag together on every release (see
    CHANGELOG.md; tests/app.test.js checks they match).
 --------------------------------------------------------------------- */
-const APP_VERSION = '1.1.1';
+const APP_VERSION = '1.1.2';
 document.getElementById('appVersion').textContent = 'v' + APP_VERSION;
 function customAlert(message){
   const cancel = document.getElementById('modalCancel');

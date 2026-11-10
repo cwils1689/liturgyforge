@@ -3,6 +3,11 @@
 Versions stay below 1.0.0 until the new sync design rolls out; that release will be 1.0.0.
 Last number for fixes, middle number for new features.
 
+## 1.1.2 — 2026-11-10
+
+- Earlier versions of a service are now under Import/Export → 🕘 Earlier Versions, for the service that's open, instead of a 🕘 button on every service in the Services panel.
+- Restoring an earlier version always keeps the version it replaced in the history, so a restore can be undone even right after a save. (Needs the updated `supabase/version-history.sql`, already run.)
+
 ## 1.1.1 — 2026-11-10
 
 - Copying bullet or numbered items from a service shown beside the open one now pastes them as a list inside the text box. Before, the bullets landed outside the box.
