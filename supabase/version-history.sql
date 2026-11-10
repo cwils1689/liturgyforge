@@ -32,6 +32,9 @@ begin
   begin
     if tg_op = 'DELETE'
        or length(new.data::text) < length(old.data::text) * 0.9
+       -- A restore from the app (it sets restoredAt): always keep what it replaces.
+       or (new.data::jsonb ? 'restoredAt'
+           and new.data::jsonb -> 'restoredAt' is distinct from old.data::jsonb -> 'restoredAt')
        or not exists (
          select 1 from liturgy_history h
          where h.service_date = old.service_date::text
@@ -99,7 +102,10 @@ create trigger shared_data_archive before update or delete on public.shared_data
   for each row execute function public.archive_shared_data_version();
 
 -- ---------- Baseline: snapshot everything as it is right now ----------
+-- (only rows without a baseline yet, so running this again adds no duplicates)
 insert into public.liturgy_history (service_date, data, updated_at, change)
-select service_date::text, data::jsonb, updated_at::timestamptz, 'baseline' from public.liturgies;
+select l.service_date::text, l.data::jsonb, l.updated_at::timestamptz, 'baseline' from public.liturgies l
+where not exists (select 1 from public.liturgy_history h where h.service_date = l.service_date::text and h.change = 'baseline');
 insert into public.shared_data_history (key, data, updated_at, change)
-select key, data::jsonb, updated_at::timestamptz, 'baseline' from public.shared_data;
+select s.key, s.data::jsonb, s.updated_at::timestamptz, 'baseline' from public.shared_data s
+where not exists (select 1 from public.shared_data_history h where h.key = s.key and h.change = 'baseline');

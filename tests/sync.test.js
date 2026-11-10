@@ -365,6 +365,13 @@ function columns(){
   console.error = origError; failRead = false;
   check('failed read: nothing written', res === null && JSON.stringify(db.liturgies[D]) === before);
 
+  // Restoring an earlier version replaces the cloud copy rather than merging into it.
+  const older = clone(base); find(older, 'Exhortation').content = 'older'; find(older, 'Prayer of Confession').content = '';
+  older.movements[0].elements.push({ uid: 'restore-only', type: 'text', title: 'Only in the older version', content: 'x' });
+  await T.pushLiturgyToSupabase(D, older, null, { replace: true });
+  const restoredRow = db.liturgies[D].data;
+  check('restore: earlier version replaces the cloud copy', T.syncSame(restoredRow, T.syncNormalizeService(older)), restoredRow);
+
   // The "put it back?" prompt is left unanswered — answering runs page code.
   let asked = false;
   ctx.formatServiceDateLabel = d => d;

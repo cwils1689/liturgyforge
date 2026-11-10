@@ -3,6 +3,13 @@
 Versions stay below 1.0.0 until the new sync design rolls out; that release will be 1.0.0.
 Last number for fixes, middle number for new features.
 
+## 1.1.0 — 2026-11-10
+
+- The Planner can be docked along the top or bottom of the screen, so the Planner and the Builder can be used at the same time. Click "Dock" in the Planner, drag its header to the other edge to move it, and drag its inner edge to make it taller or shorter. Desktop only.
+- Another service can be shown beside the open one, read-only: click 👁 next to it in the Services panel. Text can be copied from it, and an element dragged by its ⠿ handle into the open service adds a copy there. Desktop only.
+- Signed-in users can see earlier versions of a service (🕘 in the Services panel) and restore one.
+- The Services panel can list services earliest first or latest first.
+
 ## 1.0.5 — 2026-11-06
 
 - Opening or closing the hymnal or the Services panel no longer scrolls the liturgy away from where you were working. The box you're typing in, or the part of the service on screen, stays in the same spot.

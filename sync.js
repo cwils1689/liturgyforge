@@ -459,11 +459,13 @@ const sameCloudTime = (a, b) => !!a && !!b && Date.parse(a) === Date.parse(b);
 // opts.live: this is the open Builder's copy (checks for deletion elsewhere).
 // opts.favorCloud: an old copy (backup file) — fills in what the cloud is
 // missing but never overwrites what it has.
+// opts.replace: an earlier version being restored — written as is, no merge.
 async function pushLiturgyToSupabase(dateStr, snapshot, base, opts = {}){
   if(!sbClient || !currentUser || !dateStr) return null;
   let deletedElsewhere = false;
   try{
     const result = await mergeAndWriteCloudRow('liturgies', 'service_date', dateStr, cloudData => {
+      if(opts.replace) return syncNormalizeService(snapshot);
       if(cloudData === undefined && opts.live && cloudConfirmedDates.has(dateStr)){
         deletedElsewhere = true;
         return CLOUD_WRITE_SKIP;
@@ -586,6 +588,20 @@ async function fetchLiturgyFromSupabase(dateStr){
     return data.data;
   }catch(e){
     console.error('Could not fetch this service from the cloud; using the local copy instead.', e);
+    return undefined;
+  }
+}
+// A service to look at beside the open one (read-only): leaves every baseline
+// and the rest of the sync bookkeeping alone. undefined if the cloud can't
+// be reached.
+async function fetchServiceForViewing(dateStr){
+  if(!sbClient || !currentUser || !dateStr) return null;
+  try{
+    const { data, error } = await sbClient.from('liturgies').select('data').eq('service_date', dateStr).maybeSingle();
+    if(error) return undefined;
+    return data ? data.data : null;
+  }catch(e){
+    console.error('Could not fetch that service from the cloud; using the local copy instead.', e);
     return undefined;
   }
 }
