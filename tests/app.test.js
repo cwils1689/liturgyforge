@@ -50,5 +50,14 @@ const roundTrip = v => vm.runInNewContext("'" + decodeAttr(ctx.jsArgAttr(v)) + "
 });
 check('handler names: never closes the attribute', !ctx.jsArgAttr('a"b').includes('"'));
 
+// ---- release version is the same everywhere ----
+// sync.js is loaded as sync.js?v=<version>, so a new index.html never runs with
+// a browser's older copy of it. All three must change together on a release.
+const appVersion = (html.match(/const APP_VERSION = '([^']+)'/) || [])[1];
+const liveVersion = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'version.json'), 'utf8')).version;
+const syncVersion = (html.match(/<script src="sync\.js\?v=([^"]+)"><\/script>/) || [])[1];
+check('version: version.json matches APP_VERSION', liveVersion === appVersion, { appVersion, liveVersion });
+check('version: sync.js is loaded with the release version', syncVersion === appVersion, { appVersion, syncVersion });
+
 console.log(`${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

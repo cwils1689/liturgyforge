@@ -1943,7 +1943,7 @@
   </footer>
 </div>
 
-<script src="sync.js"></script>
+<script src="sync.js?v=1.1.1"></script>
 <script>
 const ICONS = {
   welcome: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="3" width="12" height="18" rx="1"/><circle cx="13.5" cy="12" r="1"/><path d="M17 3v18"/></svg>',
@@ -10031,9 +10031,12 @@ document.getElementById('comparePanelBody').addEventListener('copy', function(e)
   const range = sel.getRangeAt(0);
   const box = document.createElement('div');
   box.appendChild(range.cloneContents());
-  // A selection inside bold (etc.) text keeps that formatting.
+  // A selection inside bold (etc.) text keeps that formatting, and list items
+  // selected within one list keep the list around them.
   for(let a = range.commonAncestorContainer; a && a !== this; a = a.parentNode){
-    if(a.nodeType !== Node.ELEMENT_NODE || !/^(B|STRONG|I|EM|U|S|STRIKE|DEL|MARK|SPAN)$/.test(a.tagName)) continue;
+    if(a.nodeType !== Node.ELEMENT_NODE) continue;
+    const isList = a.tagName === 'UL' || a.tagName === 'OL';
+    if(isList ? !Array.from(box.children).some(c => c.tagName === 'LI') : !/^(B|STRONG|I|EM|U|S|STRIKE|DEL|MARK|SPAN)$/.test(a.tagName)) continue;
     const wrap = a.cloneNode(false);
     while(box.firstChild) wrap.appendChild(box.firstChild);
     box.appendChild(wrap);
@@ -10593,10 +10596,11 @@ function snoozeBackupNudge(){
    Version + update notice. version.json (next to index.html) holds the
    version that's live; a tab left open (an iPad especially) keeps
    running the code it loaded with, so it checks now and then and offers
-   a reload once a newer version is out. Bump APP_VERSION and
-   version.json together on every release (see CHANGELOG.md).
+   a reload once a newer version is out. Bump APP_VERSION, version.json
+   and the ?v= on the sync.js script tag together on every release (see
+   CHANGELOG.md; tests/app.test.js checks they match).
 --------------------------------------------------------------------- */
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.1.1';
 document.getElementById('appVersion').textContent = 'v' + APP_VERSION;
 function customAlert(message){
   const cancel = document.getElementById('modalCancel');

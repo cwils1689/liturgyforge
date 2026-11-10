@@ -3,6 +3,11 @@
 Versions stay below 1.0.0 until the new sync design rolls out; that release will be 1.0.0.
 Last number for fixes, middle number for new features.
 
+## 1.1.1 — 2026-11-10
+
+- Copying bullet or numbered items from a service shown beside the open one now pastes them as a list inside the text box. Before, the bullets landed outside the box.
+- Right after an update, the app no longer runs part new and part old code for up to 10 minutes (which kept the 👁 button from working when signed in until then). The page now always loads the matching version of its sync code, and checks its other files with the server each time.
+
 ## 1.1.0 — 2026-11-10
 
 - The Planner can be docked along the top or bottom of the screen, so the Planner and the Builder can be used at the same time. Click "Dock" in the Planner, drag its header to the other edge to move it, and drag its inner edge to make it taller or shorter. Desktop only.
